@@ -1,0 +1,22 @@
+{
+  "name": "intent-compass",
+  "version": "0.1.0",
+  "description": "Stop intent debt: keep the why next to the code, where humans and AI agents read it before they change things.",
+  "type": "module",
+  "bin": {
+    "intent": "bin/intent.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "skill"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "private": true,
+  "license": "UNLICENSED"
+}
