@@ -2,3 +2,4 @@ _study/
 node_modules/
 .DS_Store
 ANALYSIS.md
+.claude/settings.local.json
