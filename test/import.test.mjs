@@ -433,3 +433,48 @@ test('import: tolerant of odd notes (empty frontmatter, CRLF, nested map, non-re
     cleanup(root);
   }
 });
+
+test('import: date-prefixed record files keep distinct ids; only the named record is superseded', async () => {
+  const src = tempDir();
+  const root = makeRepo();
+  try {
+    writeTree(src, {
+      'decisions/2025-03-04-use-postgres.md': '# Use Postgres\n\n- Status: accepted\n\n## Decision\n\nPostgres.\n',
+      'decisions/2025-08-19-pool-size.md': '# Pool size 20\n\n- Status: accepted\n\n## Decision\n\n20.\n',
+      'decisions/2026-01-02-use-sqlite.md': '# Use SQLite\n\n- Status: accepted\n- Supersedes: [[2025-03-04-use-postgres]]\n\n## Decision\n\nSQLite.\n',
+    });
+    const out = JSON.parse((await run(root, ['import', src, '--json'])).stdout);
+    assert.deepEqual(out.imported.map((i) => i.id), ['root/2025-03-04-use-postgres', 'root/2025-08-19-pool-size', 'root/2026-01-02-use-sqlite']);
+    assert.deepEqual(out.warnings, []);
+    const index = loadIndex(loadContext(root));
+    assert.deepEqual(index.problems, []);
+    const eff = Object.fromEntries(index.records.map((r) => [r.id, r.effectiveStatus]));
+    assert.deepEqual(eff, { 'root/2025-03-04-use-postgres': 'superseded', 'root/2025-08-19-pool-size': 'accepted', 'root/2026-01-02-use-sqlite': 'accepted' });
+    const next = await run(root, ['new', 'root', 'Next decision']);
+    assert.match(next.stdout, /^Created root\/0001 \(proposed\): intent-vault\/decisions\/0001-next-decision\.md/);
+  } finally {
+    cleanup(src);
+    cleanup(root);
+  }
+});
+
+test('import: never writes through a vault folder that is a symlink into the source', async () => {
+  const { symlinkSync } = await import('node:fs');
+  const src = tempDir();
+  const root = makeRepo();
+  try {
+    writeTree(src, { 'decisions/0005-root.md': '---\nstatus: accepted\n---\n# Root rule\n\n## Decision\n\nx\n', 'archive/old.md': '# old\n' });
+    mkdirSync(join(root, 'intent-vault'), { recursive: true });
+    symlinkSync(join(src, 'archive'), join(root, 'intent-vault/decisions'), 'dir');
+    const before = snapshot(src, { mtime: false });
+    const res = await run(root, ['import', src, '--json']);
+    assert.equal(res.code, 0, res.stderr);
+    const out = JSON.parse(res.stdout);
+    assert.deepEqual(out.imported, []);
+    assert.ok(out.warnings.some((w) => /decisions\/0005-root\.md .*outside the target vault/.test(w)), out.warnings.join('\n'));
+    assert.deepEqual(snapshot(src, { mtime: false }), before, 'the source is untouched');
+  } finally {
+    cleanup(src);
+    cleanup(root);
+  }
+});

@@ -2,24 +2,25 @@
 
 import { loadContext } from '../config.mjs';
 import { applyRules, brokenMarkers, rulesStatus } from '../rules.mjs';
+import { usageOf } from '../cli.mjs';
 import { notOptedIn } from './_shared.mjs';
 
 export { brokenMarkers };
 
-const USAGE = 'usage: intent rules [--check] [--create] [--json]';
+const USAGE = usageOf('rules');
 const NO_FILE = 'file does not exist; create it or pass --create';
 
 // The core refuses a file with broken markers (applyRules skips it with broken set).
 function apply(ctx, create) {
-  return applyRules(ctx, { create }).map(({ file, action, broken }) => ({
+  return applyRules(ctx, { create }).map(({ file, action, broken, reason }) => ({
     file,
     action,
-    reason: broken ? `broken markers: ${broken}; fix them by hand` : action === 'skipped' ? NO_FILE : null,
+    reason: broken ? `broken markers: ${broken}; fix them by hand` : reason || (action === 'skipped' ? NO_FILE : null),
   }));
 }
 
 // AGENTS.md is always expected; any other rules file only needs the block when it exists.
-const passes = (s) => s.state === 'ok' || (s.state === 'no-file' && s.file !== 'AGENTS.md');
+const passes = (s) => s.state === 'ok' || s.state === 'skipped' || (s.state === 'no-file' && s.file !== 'AGENTS.md');
 
 const STATE_TEXT = {
   ok: 'ok',
@@ -28,12 +29,16 @@ const STATE_TEXT = {
 };
 
 function stateLine(s) {
+  if (s.broken) return `${s.file}: broken markers (${s.broken}); fix them by hand, then run intent rules`;
+  if (s.state === 'skipped') return `${s.file}: skipped (${s.reason})`;
   const text = s.state === 'no-file' ? (s.ok ? 'no file (optional)' : 'no file') : STATE_TEXT[s.state] || s.state;
-  return `${s.file}: ${text}${s.broken ? `; broken markers: ${s.broken}, fix them by hand` : ''}`;
+  return `${s.file}: ${text}`;
 }
 
 function check(ctx) {
-  return rulesStatus(ctx).map((s) => ({ file: s.file, state: s.state, ok: passes(s) && !s.broken, broken: s.broken || null }));
+  return rulesStatus(ctx).map((s) => ({
+    file: s.file, state: s.state, ok: passes(s) && !s.broken, broken: s.broken || null, ...(s.reason ? { reason: s.reason } : {}),
+  }));
 }
 
 function runCheck(ctx, flags, io) {
@@ -42,7 +47,7 @@ function runCheck(ctx, flags, io) {
   if (flags.json) { io.out(JSON.stringify({ ok, files: results }, null, 2)); return ok ? 0 : 1; }
   if (!results.length) io.out('No rules files configured (rulesFiles in .intent.json is empty).');
   for (const r of results) io.out(stateLine(r));
-  if (!ok) io.out('Run: intent rules');
+  if (results.some((r) => !r.ok && !r.broken)) io.out('Run: intent rules');
   return ok ? 0 : 1;
 }
 

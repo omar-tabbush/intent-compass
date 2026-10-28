@@ -52,7 +52,7 @@ intent new <module> "<the rule, present tense>" --governs <paths-or-globs> --why
 ```
 
 - `<module>` is the module folder name, or `root` for a rule that cuts across modules.
-- `--governs` takes repo-relative paths or globs, comma separated. A folder path covers everything below it. Run `intent why <path>` afterwards to confirm the record shows up.
+- `--governs` takes repo-relative paths or globs, comma separated (`--governs src/a,src/b`; a second path after a space is refused). A folder path covers everything below it. Run `intent why <path>` afterwards to confirm the record shows up.
 - `--why` is the user's words, quoted as closely as you can. No user reason means no `--why`: the Why stays TODO.
 - The record starts as `proposed`. Do not pass `--status accepted`.
 - To reverse a decision, write a new record with `--supersedes <id>`. Never edit the old one; its status is derived.
@@ -66,7 +66,7 @@ intent capture
 It drafts `proposed` records for changed code that no active record governs. Their Why is the TODO marker.
 
 - The only vault edit you make by hand is in a `proposed` record written in this session:
-  - replace the TODO title and the TODO under `## Decision` with the rule the change follows, in present tense;
+  - replace the TODO in the frontmatter `title:` line and in the `# ` heading, and the TODO under `## Decision`, with the rule the change follows, in present tense;
   - replace the TODO under `## Why — the intent` with what the user said in this session, and set `provenance: ai-suggested`.
 - If the user did not say why, leave the TODO and ask them.
 - Tell the user which records you wrote and ask them to run `intent accept <id>`.
@@ -82,9 +82,9 @@ It drafts `proposed` records for changed code that no active record governs. The
 
 With `intent init --hooks`, the repo's hooks do parts of the loop:
 
-- Before an edit, the hook adds the governing records to your context. Read the files it names.
+- When you first edit a governed file, the hook adds the governing records next to the tool result, so you read them after that edit ran. Read the files it names; if your edit breaks an accepted record, tell the user and revert or ask. Run `intent why` before editing to see them first.
 - After an edit, it runs the touch for you.
-- When you stop, it may run capture and block once with a list of new proposals. Fill their TODOs as in step 4: the Why only from the user's words, or leave it and ask.
+- When you stop, it runs capture. The first time in a session that capture drafts new proposals, it blocks once with their IDs and paths. Fill their TODOs as in step 4: the Why only from the user's words, or leave it and ask. Some changes may predate the session; do not invent a reason for those.
 
 ## Health
 

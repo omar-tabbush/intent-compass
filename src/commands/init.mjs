@@ -4,13 +4,15 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CONFIG_FILE, DEFAULTS, loadContext, readConfig, toPosix } from '../config.mjs';
+import { CONFIG_FILE, DEFAULTS, containsRepo, loadContext, readConfig, toPosix } from '../config.mjs';
 import { stringifyFrontmatter } from '../fm.mjs';
 import { HUB_FILE, region } from '../generated.mjs';
 import { normalizePath } from '../glob.mjs';
+import { indexWritable } from '../index.mjs';
 import { checkSource, importReport, importVault, ungovernedModules } from '../importer.mjs';
 import { list } from '../io.mjs';
 import { applyRules } from '../rules.mjs';
+import { git, isGitRepo } from '../git.mjs';
 import { ensureCache } from '../session.mjs';
 import { refresh } from './_shared.mjs';
 
@@ -36,9 +38,16 @@ export function intentOnPath(env) {
   return String(env.PATH || '').split(delimiter).filter(Boolean).some((d) => names.some((n) => existsSync(join(d, n))));
 }
 
-export function hookCommand() {
-  return `node "${BIN}" hook`;
+// Double quotes as before for an ordinary path; a path with $, `, ", \ or ! is single-quoted
+// on POSIX shells, so the shell never expands it.
+export function hookCommand(bin = BIN, platform = process.platform) {
+  if (platform === 'win32' || !/[$`"\\!]/.test(bin)) return `node "${bin}" hook`;
+  return `node '${bin.replace(/'/g, `'\\''`)}' hook`;
 }
+
+// Settings written by an earlier version hold the double-quoted form; it is the same hook.
+const isOurHook = (cmd, command) => cmd === command || cmd === `node "${BIN}" hook`;
+const TIMEOUT = { PreToolUse: 10, PostToolUse: 10, Stop: 60 }; // Stop runs capture over the whole change set
 
 // --- config -------------------------------------------------------------------
 
@@ -90,9 +99,9 @@ export function mergeHooks(root, command = hookCommand()) {
   const added = [];
   for (const [event, matcher] of HOOK_EVENTS) {
     const groups = hooks[event] || [];
-    const has = groups.some((g) => isObject(g) && Array.isArray(g.hooks) && g.hooks.some((h) => isObject(h) && h.command === command));
+    const has = groups.some((g) => isObject(g) && Array.isArray(g.hooks) && g.hooks.some((h) => isObject(h) && isOurHook(h.command, command)));
     if (has) continue;
-    const entry = { type: 'command', command, timeout: 10 };
+    const entry = { type: 'command', command, timeout: TIMEOUT[event] };
     hooks[event] = [...groups, matcher ? { matcher, hooks: [entry] } : { hooks: [entry] }];
     added.push(event);
   }
@@ -103,14 +112,26 @@ export function mergeHooks(root, command = hookCommand()) {
   return { action: existing ? 'updated' : 'created', added };
 }
 
-// The settings file holds a machine-specific path, so keep it out of git when the repo has a .gitignore.
+// The settings file holds a machine-specific path, so keep it out of git: in .gitignore when the
+// repo has one, else in git's info/exclude (found with rev-parse, so worktrees work).
+// Returns { file, action } or { note } when nothing can ignore it.
 function ignoreSettings(root) {
-  const file = join(root, '.gitignore');
-  if (!existsSync(file)) return null;
-  const text = readFileSync(file, 'utf8');
-  if (text.split(/\r?\n/).some((l) => SETTINGS_IGNORED.has(l.trim()))) return 'present';
-  writeFileSync(file, text + (text && !text.endsWith('\n') ? '\n' : '') + `${SETTINGS}\n`);
-  return 'updated';
+  let file = join(root, '.gitignore');
+  let line = SETTINGS;
+  if (!existsSync(file)) {
+    const none = { note: `not ignored by git: add ${SETTINGS} to .gitignore` };
+    if (!isGitRepo(root)) return none;
+    try {
+      file = resolve(root, git(root, ['rev-parse', '--git-path', 'info/exclude']).trim());
+      const pre = git(root, ['rev-parse', '--show-prefix']).trim(); // exclude patterns are relative to the top level
+      if (pre) line = `/${pre}${SETTINGS}`;
+    } catch { return none; }
+  }
+  const text = existsSync(file) ? readFileSync(file, 'utf8') : null;
+  if (text !== null && text.split(/\r?\n/).some((l) => SETTINGS_IGNORED.has(l.trim()) || l.trim() === line)) return { file, action: 'present' };
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, (text ?? '') + (text && !text.endsWith('\n') ? '\n' : '') + `${line}\n`);
+  return { file, action: text === null ? 'created' : 'updated' };
 }
 
 // --- skill --------------------------------------------------------------------
@@ -204,11 +225,14 @@ function preflight(root, flags) {
   const hasConfig = existsSync(join(root, CONFIG_FILE));
   let config;
   if (hasConfig) {
-    try { config = readConfig(root); } catch (e) { throw new Error(`cannot read ${CONFIG_FILE}: ${e.message}`); }
+    config = readConfig(root); // its error already names the file
   } else config = newConfig(root, flags);
   const vaultDir = isAbsolute(config.vault) ? config.vault : resolve(root, config.vault);
   // Notes at the repo root would be read as code (and code folders as vault folders).
   if (resolve(vaultDir) === root) throw new Error('the vault cannot be the repo root itself; use a folder such as intent-vault');
+  if (containsRepo(vaultDir, root)) throw new Error('the vault cannot be the repo root or a folder that contains it; use a folder such as intent-vault');
+  const indexFile = join(vaultDir, 'index.json');
+  if (!indexWritable(indexFile)) throw new Error(`${indexFile} exists and is not an intent index; move it away`);
   const src = flags.import ? resolve(root, String(flags.import)) : null;
   if (src) checkSource(src, vaultDir);
   if (flags.skill && !filesUnder(SKILL_DIR).length) throw new Error(`skill files not found in ${SKILL_DIR}`);
@@ -254,15 +278,16 @@ export async function run({ flags }, io) {
       const h = mergeHooks(root);
       mark(join(root, SETTINGS), h.action, false, h.added.length ? `hooks: ${h.added.join(', ')}` : 'hooks already there');
       const gi = ignoreSettings(root);
-      if (gi) mark(join(root, '.gitignore'), gi, false, `ignores ${SETTINGS}`);
+      if (gi.file) mark(gi.file, gi.action, false, `ignores ${SETTINGS}`);
+      else steps.at(-1).note += `; ${gi.note}`;
     }
     if (flags.skill) {
       for (const s of installSkill(root, { force: Boolean(flags.force) })) mark(s.path, s.action, false, s.note);
     }
     if (flags.rules) {
       for (const r of applyRules(ctx)) {
-        const note = r.broken ? `broken markers (${r.broken}); fix them by hand` : r.action === 'skipped' ? 'no such file; left alone' : 'rules block';
-        mark(join(root, r.file), r.action === 'unchanged' ? 'present' : r.action, false, note);
+        const note = r.broken ? `broken markers (${r.broken}); fix them by hand` : r.reason || (r.action === 'skipped' ? 'no such file; left alone' : 'rules block');
+        mark(resolve(root, r.file), r.action === 'unchanged' ? 'present' : r.action, false, note);
       }
     }
   } catch (e) {

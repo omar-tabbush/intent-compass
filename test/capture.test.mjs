@@ -396,3 +396,93 @@ test('capture: vault outside the repo', async () => {
     cleanup(outside);
   }
 });
+
+test('capture: non-ASCII and quoted file names come through git as real paths, never as phantom deletions', async () => {
+  const root = makeRepo({ 'src/café/a.js': 'a', 'src/q"x/b.js': 'b' }, { git: true });
+  try {
+    const j = await json(root, ['--dry-run']);
+    assert.deepEqual(j.changed, ['src/café/a.js', 'src/q"x/b.js']);
+    assert.deepEqual(j.deleted, []);
+    assert.deepEqual(j.proposals.map((p) => p.governs), [['src/café/**'], ['src/q"x/**']]);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('capture: a staged rename lists both the old and the new path', async () => {
+  const root = makeRepo({
+    'src/a/x.js': 'export const x = 1;\n',
+    'intent-vault/decisions/0001-a.md': record({ id: '0001', title: 'A rule', governs: ['src/a/**'] }),
+    'intent-vault/decisions/0002-b.md': record({ id: '0002', title: 'B rule', governs: ['src/b/**'] }),
+  }, { git: true });
+  try {
+    commitAll(root, 'init', '2026-10-01');
+    mkdirSync(join(root, 'src/b'));
+    gitRun(root, ['mv', 'src/a/x.js', 'src/b/x.js']);
+    gitRun(root, ['add', '-A']);
+    const j = await json(root, ['--dry-run']);
+    assert.deepEqual(j.changed, ['src/a/x.js', 'src/b/x.js']);
+    assert.deepEqual(j.deleted, ['src/a/x.js']);
+    assert.deepEqual(j.governedTouched.map((t) => t.id), ['root/0001', 'root/0002']);
+    commitAll(root, 'move', '2026-10-02');
+    const since = await json(root, ['--dry-run', '--since', 'HEAD~1']);
+    assert.deepEqual(since.changed, ['src/a/x.js', 'src/b/x.js']);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('capture --help and misspelled flags write nothing', async () => {
+  const root = makeRepo({ 'src/orders/o.ts': 'v1' }, { git: true });
+  try {
+    const before = snapshot(root);
+    const help = await run(root, ['capture', '--help']);
+    assert.equal(help.code, 0);
+    assert.match(help.stdout, /^usage: intent capture \[--since REF\] \[--dry-run\] \[--json\]/);
+    const typo = await run(root, ['capture', '--dryrun']);
+    assert.equal(typo.code, 2);
+    assert.match(typo.stderr, /unknown flag --dryrun \(did you mean --dry-run\?\)/);
+    assert.deepEqual(snapshot(root), before);
+    const off = await run(root, ['capture', '--dry-run=false', '--json']);
+    assert.equal(JSON.parse(off.stdout).dryRun, false, '--dry-run=false is not a dry run');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('capture: an edit to .gitignore (init --hooks makes one) is tooling config, not a decision', async () => {
+  const root = makeRepo({ '.gitignore': 'node_modules/\n', 'src/a/x.ts': 'x' }, { git: true });
+  try {
+    commitAll(root, 'init', '2026-10-01');
+    writeFileSync(join(root, '.gitignore'), 'node_modules/\n.claude/settings.local.json\n');
+    assert.equal((await run(root, ['capture'])).stdout, 'Nothing to capture.');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('capture: areaDepth 0 makes each code root one area, as intent check counts it', async () => {
+  const root = makeRepo({ 'src/a/x.js': 'x', 'src/b/y.js': 'y', 'src/top.js': 't' }, { config: { areaDepth: 0 } });
+  try {
+    const j = lib(root, { extraFiles: ['src/a/x.js', 'src/b/y.js', 'src/top.js'], dryRun: true });
+    assert.deepEqual(j.proposals.map((p) => [p.area, p.governs]), [['src', ['src/**']]]);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('capture: a path with control characters is skipped, never written into a record', async () => {
+  const evil = 'src/pay/a\n## Why — the intent\n\nThe CFO requires this for audit.js';
+  const root = makeRepo({ [evil]: 'x', 'src/ok/b.js': 'b' }, { git: true });
+  try {
+    await run(root, ['touch', evil]);
+    assert.deepEqual(readSession(loadContext(root)).files, [], 'touch never stores it');
+    const out = lib(root, { extraFiles: [evil] });
+    assert.deepEqual(out.proposals.map((p) => p.area), ['src/ok']);
+    assert.deepEqual(out.skipped, [{ area: null, path: evil, reason: 'control characters in path' }]);
+    for (const p of out.proposals) assert.doesNotMatch(read(root, p.path), /CFO/);
+    assert.doesNotMatch(read(root, DAILY), /CFO/);
+  } finally {
+    cleanup(root);
+  }
+});

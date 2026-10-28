@@ -17,7 +17,7 @@ Facts from `docs/SPEC.md`, shortened. The spec wins when they differ.
     modules/<m>/decisions/NNNN-slug.md
     daily/YYYY-MM-DD.md             # session log; capture appends
     index.json                      # generated
-    .cache/                         # session touch list and hook state, not committed
+    .cache/                         # session touch list (session.jsonl) and hook state, not committed
 ```
 
 Files are the truth. `index.json` and everything between `<!-- intent:generated:* -->` markers are rebuilt from the records (`intent index`). Do not edit them by hand.
@@ -27,15 +27,15 @@ Files are the truth. `index.json` and everything between `<!-- intent:generated:
 | Key | Default | Meaning |
 |---|---|---|
 | `version` | `1` | Config format version |
-| `vault` | `"intent-vault"` | Vault folder, relative to the repo root, or absolute; not the repo root itself |
+| `vault` | `"intent-vault"` | Vault folder, relative to the repo root, or absolute; not the repo root or a folder above it |
 | `codeRoots` | `["src"]` | Code folders; `intent check` and `intent capture` group files into areas below them |
-| `areaDepth` | `1` | Folder levels below each code root that make one area |
+| `areaDepth` | `1` | Folder levels below each code root that make one area; `0` makes each code root one area |
 | `ignore` | `node_modules/**`, `dist/**`, `build/**`, ... | Globs never listed as code |
 | `reviewMonths` | `6` | Default gap between `date` and `review_date` |
 | `proposedMaxDays` | `14` | Age after which a `proposed` record counts as stale |
 | `rulesFiles` | `["AGENTS.md", "CLAUDE.md"]` | Files that carry the agent rules block |
 
-Missing keys take the defaults.
+Missing or wrong-typed keys take the defaults; a single string where a list is expected is a one-item list.
 
 ## Decision record
 
@@ -61,7 +61,8 @@ tags: [payments]
 ## Consequences
 ```
 
-- **IDs** are `<namespace>/<NNNN>`. The namespace is the module folder, or `root` for `decisions/` at the vault root. The tool allocates the number; never choose one yourself.
+- **IDs** are `<namespace>/<NNNN>`. The namespace is the module folder, or `root` for `decisions/` at the vault root. The tool allocates the number; never choose one yourself. A file named `001-x.md` is `root/0001`; a file whose name starts with a date (`2023-10-05-x.md`) has no number and its ID is `root/2023-10-05-x`.
+- **Not a record:** a `README.md` or loose note in a decisions folder (no number, status, `id` or `## Decision`) is skipped by the index.
 - **`governs`** holds repo-relative paths or globs (see Globs).
 - **`supersedes`** lists the IDs this record replaces. The old record is never edited.
 - **Missing Why.** A record with no stated reason keeps this exact line under `## Why — the intent`:
@@ -81,9 +82,9 @@ tags: [payments]
 | `superseded` | Replaced by a later record. |
 | `deprecated` | No longer applies. |
 
-- **Active** means `accepted`, or a status the reader could not classify (`unknown`).
+- **Active** means `accepted`, or a status the reader could not classify (`unknown`). A negated status (`Not accepted`, `no longer active`) or a rejected or abandoned proposal (`Proposal rejected`, `Draft (abandoned)`) is never active.
 - **Effective status** is derived, not written. A record is effectively `superseded` when an active record lists it in `supersedes`, or when it declares `status: superseded` or `superseded-by` itself.
-- **The one edit to an existing record** is `intent accept`: it flips `status: proposed` to `accepted` and changes nothing else. It refuses any other status.
+- **The one edit to an existing record** is `intent accept`: it flips `status: proposed` (or `draft`) to `accepted` and changes nothing else; a trailing `# comment` stays. It refuses any other status, including a qualified one such as `Pending removal`: a human edits that by hand.
 
 ## Provenance
 
@@ -93,6 +94,8 @@ tags: [payments]
 | `ai-suggested` | An agent, with the Why taken from what the user said in the session. |
 | `inferred-from-code` | `intent capture`, from the changed files. The Why stays TODO. |
 | `imported` | `intent import`, which also adds `source:` and `imported_at`. |
+
+`intent new` defaults to `ai-suggested` when the environment has `CLAUDECODE` (set by Claude Code) or `INTENT_AGENT` set, and to `human` otherwise. Other agents pass `--provenance ai-suggested`, as the rules block says.
 
 ## Module note
 
@@ -119,7 +122,9 @@ The module note lives at `modules/<m>/<m>.md`. Its `governs` points agents at th
 
 ## Globs
 
-- `**` matches across folders; `*` and `?` match within one path segment.
+- `**` matches across folders; `*` and `?` match within one path segment; `{a,b}` (with a comma) is a choice.
+- Nothing else is glob syntax: `src/app/[id]` and `src/{legacy}` are plain folder names.
+- `.` and `..` are resolved; a path that climbs out of the repo matches nothing.
 - A plain path with no glob characters matches itself and everything below it.
 - A trailing `/` means the folder and everything below it.
 - Paths are repo-relative posix with no leading `./`.
@@ -130,17 +135,19 @@ Examples: `src/billing/**` and `src/billing` both cover `src/billing/a/b.ts`. `s
 
 | Command | What it does |
 |---|---|
-| `intent init [--vault DIR] [--code a,b] [--import SRC] [--hooks] [--skill] [--rules]` | Writes `.intent.json` and the vault skeleton if missing; never overwrites. Each flag adds its piece. |
-| `intent import SRC [--dry-run]` | Copies records and module notes from an Obsidian-style vault into this vault. Never modifies the source. |
-| `intent why PATH… [--json]` | Lists the records and module notes that govern each file or folder, active first, and the files to read. |
+| `intent init [--vault DIR] [--code a,b] [--import SRC] [--hooks] [--skill] [--force] [--rules] [--json]` | Writes `.intent.json` and the vault skeleton if missing; never overwrites. Each flag adds its piece. `--force` replaces skill files that differ. |
+| `intent import SRC [--dry-run] [--json]` | Copies records and module notes from an Obsidian-style vault into this vault. Never modifies the source. |
+| `intent why PATH… [--json]` | Lists the records and module notes that govern each file or folder, active first, with their files, and the files to read. Exits 1 when a path is outside the repo. |
 | `intent check [--json] [--min N]` | Intent-debt report with a 0–100 score. Exits 1 when the score is below `--min`. |
 | `intent capture [--since REF] [--dry-run] [--json]` | Proposes records for changed code that no active record governs. The Why stays TODO. Appends to today's daily note. |
-| `intent touch PATH…` | Adds the paths to the session touch list. |
-| `intent rules [--check]` | Writes or refreshes the rules block in each `rulesFiles` entry. `--check` exits 1 when a block is missing or outdated. |
-| `intent new MODULE "TITLE" [--governs a,b] [--supersedes ID] [--why TEXT] [--provenance P] [--status S]` | Writes a new record with an allocated ID. Default status `proposed`. Creates the module note if missing. |
-| `intent accept ID…` | Flips `proposed` to `accepted` in those records. |
+| `intent touch PATH… [--verbose]` | Adds the paths to the session touch list. |
+| `intent rules [--check] [--create] [--json]` | Writes or refreshes the rules block in each `rulesFiles` entry; `--create` also creates missing files other than `AGENTS.md`. `--check` exits 1 when a block is missing, outdated or has broken markers. |
+| `intent new MODULE "TITLE" [--governs a,b] [--supersedes ID] [--why TEXT] [--provenance P] [--status S] [--context T] [--decision T] [--alternatives T] [--consequences T] [--review DATE] [--tags a,b] [--json]` | Writes a new record with an allocated ID. Default status `proposed`. Creates the module note if missing. |
+| `intent accept ID… [--json]` | Flips `proposed` to `accepted` in those records. |
 | `intent index` | Rebuilds `index.json` and the generated regions. |
 | `intent hook` | Claude Code hook entry. Reads the hook JSON on stdin. Never blocks an edit. |
+
+`intent <command> --help` prints a command's usage without running it. An unknown flag exits 2 before anything runs.
 
 Outside an opted-in repo, commands print one line to stderr and exit 1. `intent hook` exits 0 with no output there. `intent init` is how a repo opts in.
 

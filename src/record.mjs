@@ -29,7 +29,7 @@ export function renderRecord(meta, body = {}) {
   };
   for (const [k, v] of Object.entries(meta.extra || {})) fm[k] = v;
   let out = stringifyFrontmatter(fm);
-  out += `# ${meta.title}\n`;
+  out += `# ${String(meta.title).replace(/[\x00-\x1f\x7f]/g, ' ')}\n`; // a heading is one line
   for (const [key, heading] of SECTION_ORDER) {
     const text = body[key] && String(body[key]).trim() ? String(body[key]).trim() : key === 'why' ? TODO_WHY : TODO;
     out += `\n## ${heading}\n\n${text}\n`;

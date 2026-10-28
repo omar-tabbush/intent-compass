@@ -6,7 +6,7 @@ date: 2026-01-10
 module: root
 governs: [src/auth/**]
 provenance: human
-review_date: 2027-01-10
+review_date: 2099-01-01
 supersedes: []
 tags: [auth, privacy]
 ---

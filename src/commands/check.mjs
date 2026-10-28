@@ -1,6 +1,6 @@
 // intent check: the intent-debt report and its 0-100 score. Read-only: it writes nothing.
 
-import { loadContext, vaultPath } from '../config.mjs';
+import { loadContext, vaultPath, vaultWarning } from '../config.mjs';
 import { loadIndex } from '../index.mjs';
 import { isGitRepo, lastChangeMap } from '../git.mjs';
 import { validModuleName } from '../ids.mjs';
@@ -24,6 +24,8 @@ const LABELS = {
 export async function run({ flags }, io) {
   const ctx = loadContext(io.cwd);
   if (!ctx) return notOptedIn(io);
+  const warning = vaultWarning(ctx);
+  if (warning) io.err(warning);
   const min = parseMin(flags.min);
   if (min === false) {
     io.err('intent check: --min needs a number from 0 to 100.');
@@ -61,10 +63,10 @@ export function render(report, ctx) {
   }
 
   section(lines, LABELS.uncoveredAreas, f.uncoveredAreas, (a) => `${a.area} (${a.files} ${a.files === 1 ? 'file' : 'files'}${a.proposed.length ? `; waiting for intent accept: ${a.proposed.join(', ')}` : ''})`);
-  section(lines, LABELS.drift, f.drift, (d) => `${d.id} (${d.date}): ${d.total} changed since, latest ${d.files[0].file} on ${d.files[0].changed}`);
-  section(lines, LABELS.overdue, f.overdue, (r) => `${r.id}: review was due ${r.reviewDate}`);
+  section(lines, LABELS.drift, f.drift, (d) => `${d.id} (${d.date}): ${d.total} changed since, latest ${d.files[0].file} on ${d.files[0].changed} (${vp(d.path)})`);
+  section(lines, LABELS.overdue, f.overdue, (r) => `${r.id}: review was due ${r.reviewDate} (${vp(r.path)})`);
   section(lines, LABELS.deadGoverns, f.deadGoverns, (d) => `${d.id || `module ${d.module}`}: ${d.pattern} (${vp(d.path)})`);
-  section(lines, LABELS.staleProposed, f.staleProposed, (r) => `${r.id}: proposed ${r.days} days ago (${r.date})`);
+  section(lines, LABELS.staleProposed, f.staleProposed, (r) => `${r.id}: proposed ${r.days} days ago (${r.date}) (${vp(r.path)})`);
   section(lines, LABELS.missingWhy, f.missingWhy, (r) => `${r.id} (${vp(r.path)})`);
   section(lines, LABELS.unreachable, f.unreachable, (r) => `${r.id} (${vp(r.path)})`);
   section(lines, LABELS.problems, f.problems, (p) => `${p.kind}: ${p.message} (${problemPaths(ctx, p)})`);
@@ -105,9 +107,9 @@ function hint(report, ctx) {
       return `${gap('uncovered area', 'uncovered areas')} Record intent: intent new ${moduleArg(first.area.split('/').at(-1))} "<the rule>" --governs ${first.area}/**`;
     }
     case 'drift':
-      return `${gap('drifted record', 'drifted records')} Re-read ${first.id} against its changed files; if it no longer holds: ${supersede(first)}`;
+      return `${gap('drifted record', 'drifted records')} Re-read ${first.id} (${vaultPath(ctx, first.path)}) against its changed files; if it no longer holds: ${supersede(first)}`;
     case 'overdue':
-      return `${gap('overdue review', 'overdue reviews')} Re-read ${first.id}; if it no longer holds: ${supersede(first)}`;
+      return `${gap('overdue review', 'overdue reviews')} Re-read ${first.id} (${vaultPath(ctx, first.path)}); if it no longer holds: ${supersede(first)}`;
     case 'deadGoverns':
       return first.module && !first.id
         ? `${gap('dead governs pattern', 'dead governs patterns')} Point ${first.pattern} in ${vaultPath(ctx, first.path)} at code that exists.`

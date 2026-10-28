@@ -255,7 +255,8 @@ test('rules: refuses a stray end marker and two blocks; --check fails on them', 
     writeTree(root, { 'AGENTS.md': twice });
     r = await run(root, ['rules', '--check']);
     assert.equal(r.code, 1, 'the first block is current, but the duplicate still fails');
-    assert.match(r.stdout, /^AGENTS\.md: ok; broken markers: 2 start and 2 end markers, fix them by hand$/m);
+    assert.match(r.stdout, /^AGENTS\.md: broken markers \(2 start and 2 end markers\); fix them by hand, then run intent rules$/m);
+    assert.doesNotMatch(r.stdout, /^Run: intent rules$/m, 'intent rules would refuse this file');
     assert.equal((await run(root, ['rules'])).code, 1);
     assert.equal(read(root, 'AGENTS.md'), twice);
   } finally { cleanup(root); }
@@ -318,4 +319,78 @@ test('core rules: a string rulesFiles is one file, not a crash', () => {
     assert.deepEqual(applyRules(ctx), [{ file: 'AGENTS.md', action: 'created' }]);
     assert.deepEqual(rulesStatus(ctx), [{ file: 'AGENTS.md', state: 'ok' }]);
   } finally { cleanup(root); }
+});
+
+test('rules --help writes nothing', async () => {
+  const root = makeRepo();
+  try {
+    const r = await run(root, ['rules', '--help']);
+    assert.equal(r.code, 0);
+    assert.match(r.stdout, /^usage: intent rules/);
+    assert.equal(exists(root, 'AGENTS.md'), false);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('rules block: agents record with --provenance ai-suggested, comma-separated governs, and both title spots', () => {
+  const root = makeRepo();
+  try {
+    const block = rulesBlock(loadContext(root));
+    assert.match(block, /intent new <module> "<the rule, present tense>" --governs <path>\[,<path>\.\.\.\] --why "<the user's own words>" --provenance ai-suggested/);
+    assert.match(block, /set `provenance: ai-suggested`/);
+    assert.match(block, /the TODO in the frontmatter `title:` line and in the `# ` heading/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('rules: a CRLF AGENTS.md with a current block is ok, and a refresh keeps CRLF', async () => {
+  const root = makeRepo({}, { config: { rulesFiles: ['AGENTS.md'] } });
+  try {
+    await run(root, ['rules']);
+    const lf = read(root, 'AGENTS.md');
+    writeTree(root, { 'AGENTS.md': lf.replace(/\n/g, '\r\n') });
+    const c = await run(root, ['rules', '--check']);
+    assert.equal(c.code, 0, c.stdout);
+    const old = lf.replace(/hash=[a-f0-9]+/, 'hash=0000000000').replace(/\n/g, '\r\n');
+    writeTree(root, { 'AGENTS.md': old });
+    await run(root, ['rules']);
+    const after = read(root, 'AGENTS.md');
+    assert.equal(after.replace(/\r\n/g, '').includes('\n'), false, 'no bare LF line endings');
+    assert.equal((await run(root, ['rules', '--check'])).code, 0);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('rules: entries that point outside the repo are skipped, never written', async () => {
+  const parent = tempDir();
+  try {
+    writeTree(parent, { 'outside/NOTES.md': '# notes\n', 'repo/.intent.json': { version: 1, rulesFiles: ['AGENTS.md', '../outside/NOTES.md', '../outside/new-file.md', '/tmp/abs-rules.md', 'intent-vault/rules.md'] } });
+    const root = join(parent, 'repo');
+    const r = await run(root, ['rules', '--create', '--json']);
+    const files = Object.fromEntries(JSON.parse(r.stdout).files.map((f) => [f.file, f]));
+    assert.equal(files['AGENTS.md'].action, 'created');
+    for (const f of ['../outside/NOTES.md', '../outside/new-file.md', '/tmp/abs-rules.md', 'intent-vault/rules.md']) {
+      assert.equal(files[f].action, 'skipped', f);
+      assert.equal(files[f].reason, 'outside the repo or inside the vault', f);
+    }
+    assert.equal(read(parent, 'outside/NOTES.md'), '# notes\n');
+    assert.equal(exists(parent, 'outside/new-file.md'), false);
+    assert.equal(exists(root, 'intent-vault/rules.md'), false);
+  } finally {
+    cleanup(parent);
+  }
+});
+
+test('rules --check: broken markers read as broken, with a fix that works', async () => {
+  const root = makeRepo({ 'AGENTS.md': '# A\n<!-- intent-compass:start hash=abc -->\nx\n<!-- intent-compass:end -->\n<!-- intent-compass:end -->\n' }, { config: { rulesFiles: ['AGENTS.md'] } });
+  try {
+    const r = await run(root, ['rules', '--check']);
+    assert.equal(r.code, 1);
+    assert.equal(r.stdout, 'AGENTS.md: broken markers (1 start and 2 end markers); fix them by hand, then run intent rules');
+  } finally {
+    cleanup(root);
+  }
 });

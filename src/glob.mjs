@@ -1,15 +1,24 @@
+import { posix } from 'node:path';
+
 // Path globs: ** crosses folders, * and ? stay inside one segment.
 // A plain path matches itself and everything below it; a trailing / means the folder.
 
+// "." and ".." segments are resolved, so "src/../../x" reads as "../x" (outside the repo).
 export function normalizePath(p) {
   let s = String(p ?? '').trim().replace(/\\/g, '/').replace(/\/{2,}/g, '/');
   while (s.startsWith('./')) s = s.slice(2);
   if (s.startsWith('/')) s = s.slice(1);
+  if (/(^|\/)\.{1,2}(\/|$)/.test(s)) {
+    const trail = s.endsWith('/') ? '/' : '';
+    s = posix.normalize(s).replace(/\/$/, '');
+    s = s === '.' ? '' : s + (trail && s ? trail : '');
+  }
   return s;
 }
 
+// Only * ? and {a,b} are glob syntax (SPEC §5): [id] and {legacy} are literal folder names.
 export function hasGlob(p) {
-  return /[*?[\]{}]/.test(p);
+  return /[*?]/.test(p) || /\{[^{}]*,[^{}]*\}/.test(p);
 }
 
 const cache = new Map();
@@ -28,7 +37,7 @@ export function globToRegex(pattern) {
     } else if (c === '?') re += '[^/]';
     else if (c === '{') {
       const end = p.indexOf('}', i);
-      if (end > i) {
+      if (end > i && p.slice(i + 1, end).includes(',')) {
         re += '(?:' + p.slice(i + 1, end).split(',').map(escape).join('|') + ')';
         i = end;
       } else re += '\\{';
@@ -43,15 +52,25 @@ function escape(s) {
   return s.replace(/[\\^$+.()|[\]{}*?]/g, '\\$&');
 }
 
+// A pattern is normalized and compiled once: capture and check match every file against every glob.
+const compiled = new Map();
+function compile(pattern) {
+  const key = String(pattern);
+  let c = compiled.get(key);
+  if (c) return c;
+  const p = normalizePath(key);
+  c = { p, plain: p && !hasGlob(p) ? p.replace(/\/$/, '') : null, rx: p && hasGlob(p) ? globToRegex(p) : null };
+  if (compiled.size > 20000) compiled.clear();
+  compiled.set(key, c);
+  return c;
+}
+
 export function matchPath(pattern, file) {
-  const p = normalizePath(pattern);
-  const f = normalizePath(file).replace(/\/$/, '');
+  const { p, plain, rx } = compile(pattern);
   if (!p) return false;
-  if (!hasGlob(p)) {
-    const base = p.replace(/\/$/, '');
-    return f === base || f.startsWith(base + '/');
-  }
-  if (globToRegex(p).test(f)) return true;
+  const f = normalizePath(file).replace(/\/$/, '');
+  if (plain !== null) return f === plain || f.startsWith(plain + '/');
+  if (rx.test(f)) return true;
   // "src/a/**" also names the folder "src/a" itself.
   if (p.endsWith('/**') && f === p.slice(0, -3)) return true;
   if (p.endsWith('/') && f === p.slice(0, -1)) return true;

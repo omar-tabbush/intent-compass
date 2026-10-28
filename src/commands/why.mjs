@@ -1,8 +1,9 @@
 // intent why: the records and module notes that govern a path, active first, and the files to read.
 
 import { isAbsolute } from 'node:path';
-import { loadContext, vaultPath } from '../config.mjs';
-import { loadIndex, governing, ACTIVE } from '../index.mjs';
+import { loadContext, vaultPath, vaultWarning } from '../config.mjs';
+import { loadIndex, governing, shallowMention, ACTIVE } from '../index.mjs';
+import { usageOf } from '../cli.mjs';
 import { notOptedIn } from './_shared.mjs';
 
 function outside(rel) {
@@ -18,6 +19,7 @@ function describe(ctx, g) {
     governs: m.governs,
     reason,
   }));
+  const pointerOnly = new Set(g.items.filter((it) => shallowMention(ctx, it.reasons)).map((it) => it.record));
   const records = g.items.map(({ record: r, reasons }) => ({
     id: r.id,
     title: r.title,
@@ -28,9 +30,10 @@ function describe(ctx, g) {
     missingWhy: r.missingWhy,
     supersededBy: r.supersededBy,
     pendingReplacements: r.pendingReplacements,
+    pointer: pointerOnly.has(r),
   }));
   const read = [...new Set([
-    ...records.filter((r) => ACTIVE.has(r.effectiveStatus)).map((r) => r.path),
+    ...records.filter((r) => ACTIVE.has(r.effectiveStatus) && !r.pointer).map((r) => r.path),
     ...modules.map((m) => m.path),
   ])];
   return { path: g.path, isDir: g.isDir, modules, records, read };
@@ -50,7 +53,11 @@ function reasonLine(r) {
   return r.reasons.join(' · ');
 }
 
-const hint = (d) => `If you make a load-bearing choice here, record it: intent new <module> "<rule>" --governs ${d.path || '.'}`;
+const hint = (d) => {
+  const waiting = d.records.find((r) => r.effectiveStatus === 'proposed');
+  if (waiting) return `Proposed records are waiting: ask the user to confirm one with intent accept ${waiting.id} before you write a new one.`;
+  return `If you make a load-bearing choice here, record it: intent new <module> "<rule>" --governs ${d.path || '.'}`;
+};
 
 function printHuman(io, d) {
   const shown = d.path === '' ? '.' : d.isDir ? `${d.path}/` : d.path;
@@ -65,7 +72,8 @@ function printHuman(io, d) {
   }
   for (const r of d.records) {
     io.out(`  ${r.effectiveStatus.padEnd(12)}${r.id}  ${r.title}${notes(r)}`);
-    io.out(`  ${' '.repeat(12)}${reasonLine(r)}`);
+    // A record not in the read list (proposed, superseded, a mere pointer) still shows its file.
+    io.out(`  ${' '.repeat(12)}${reasonLine(r)}${d.read.includes(r.path) ? '' : `  (${r.path})`}`);
   }
   if (d.read.length) {
     io.out('Read before editing:');
@@ -77,9 +85,11 @@ function printHuman(io, d) {
 }
 
 export async function run({ positional, flags }, io) {
-  if (!positional.length) { io.err('usage: intent why PATH... [--json]'); return 2; }
+  if (!positional.length) { io.err(usageOf('why')); return 2; }
   const ctx = loadContext(io.cwd);
   if (!ctx) return notOptedIn(io);
+  const warning = vaultWarning(ctx);
+  if (warning) io.err(warning);
   const index = loadIndex(ctx);
   let code = 0;
   const results = [];

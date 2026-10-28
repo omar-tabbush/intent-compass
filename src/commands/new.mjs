@@ -1,18 +1,20 @@
 // intent new: write a new decision record with an allocated ID. The Why stays TODO unless given.
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join, posix } from 'node:path';
 import { loadContext, vaultPath } from '../config.mjs';
 import { loadIndex } from '../index.mjs';
 import { freeNumber, nextNumber, recordRelPath, moduleRelPath, slugify, validModuleName } from '../ids.mjs';
 import { renderRecord, reviewDateFor, isoDate } from '../record.mjs';
 import { stringifyFrontmatter } from '../fm.mjs';
 import { normalizePath } from '../glob.mjs';
+import { validDate } from '../vault.mjs';
 import { region } from '../generated.mjs';
 import { list } from '../io.mjs';
+import { usageOf } from '../cli.mjs';
 import { notOptedIn, refresh } from './_shared.mjs';
 
-const USAGE = 'usage: intent new MODULE "TITLE" [--governs a,b] [--supersedes ID] [--why TEXT] [--status proposed|accepted] [--json]';
+const USAGE = usageOf('new');
 const STATUSES = ['proposed', 'accepted'];
 const PROVENANCES = ['human', 'ai-suggested', 'inferred-from-code', 'imported'];
 const VALUE_FLAGS = ['governs', 'supersedes', 'why', 'context', 'decision', 'alternatives', 'consequences', 'provenance', 'status', 'review', 'tags'];
@@ -22,28 +24,26 @@ class Fail extends Error {
 }
 
 // "billing/0003", "billing/3", "billing 0003", or a bare number within ns.
+// The namespace part is matched in any case: "billing/0001" finds Billing/0001.
 export function resolveId(index, raw, ns) {
   const s = String(raw).trim();
-  const ids = new Set(index.records.map((r) => r.id));
-  if (ids.has(s)) return s;
+  const ids = new Map();
+  for (const r of index.records) if (!ids.has(r.id.toLowerCase())) ids.set(r.id.toLowerCase(), r.id);
+  if (index.records.some((r) => r.id === s)) return s;
+  if (ids.has(s.toLowerCase())) return ids.get(s.toLowerCase());
   const m = s.match(/^(?:([\w.-]+)[/ ]+)?(\d+)$/);
   if (!m) return null;
-  const id = `${m[1] || ns}/${m[2].padStart(4, '0')}`;
-  return ids.has(id) ? id : null;
+  return ids.get(`${m[1] || ns}/${m[2].padStart(4, '0')}`.toLowerCase()) ?? null;
 }
 
+// Repo-relative, with "." and ".." resolved: "src/../../x" climbs out and is refused.
 function governsList(ctx, flag, cwd) {
   return list(flag).map((g) => {
     const rel = isAbsolute(g) ? ctx.rel(g, cwd) : normalizePath(g);
-    if (!rel || rel === '..' || rel.startsWith('../') || isAbsolute(rel)) throw new Fail(`--governs ${g} is not a path inside the repo`);
-    return rel;
+    const n = rel ? posix.normalize(rel) : '';
+    if (!n || n === '.' || n === '..' || n.startsWith('../') || n.startsWith('/') || isAbsolute(n)) throw new Fail(`--governs ${g} is not a path inside the repo`);
+    return n;
   });
-}
-
-function validDate(s) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
-  const d = new Date(s + 'T00:00:00Z');
-  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
 }
 
 const hasText = (v) => typeof v === 'string' && v.trim() !== '';
@@ -64,15 +64,19 @@ function moduleNoteText(name, governs) {
   return `${stringifyFrontmatter({ type: 'module', module: name, governs })}# ${name}\n\n${region('decisions', '## Decisions')}\n`;
 }
 
-function build(ctx, { positional, flags }, io) {
+function build(ctx, { positional, flags, late = [] }, io) {
+  // "--governs src/a src/b": the second path would end up in the title (and the file name) forever.
+  if (late.length && positional.length - late.length >= 2) {
+    throw new Fail(`unexpected argument "${late[0]}" after a flag; quote the title and give --governs a comma-separated list (a,b)`, 2);
+  }
   const [moduleArg, ...titleParts] = positional;
   const title = titleParts.join(' ').replace(/\s+/g, ' ').trim();
   if (!moduleArg || !title) throw new Fail(USAGE, 2);
   for (const f of VALUE_FLAGS) if (flags[f] === true) throw new Fail(`--${f} needs a value`, 2);
 
-  const ns = moduleArg === 'root' ? 'root' : moduleArg;
+  let ns = moduleArg === 'root' ? 'root' : moduleArg;
   if (ns !== 'root' && !validModuleName(ns)) {
-    throw new Fail(`invalid module name "${moduleArg}": use letters, digits, ".", "_" or "-" (or "root" for a cross-cutting record)`);
+    throw new Fail(`invalid module name "${moduleArg}": use letters, digits, ".", "_" or "-", not decisions, modules or daily (or "root" for a cross-cutting record)`);
   }
   const status = flags.status ?? 'proposed';
   if (!STATUSES.includes(status)) throw new Fail(`--status must be one of ${STATUSES.join(', ')}, got "${status}"`);
@@ -80,6 +84,10 @@ function build(ctx, { positional, flags }, io) {
   if (!PROVENANCES.includes(provenance)) throw new Fail(`--provenance must be one of ${PROVENANCES.join(', ')}, got "${provenance}"`);
 
   const index = loadIndex(ctx);
+  // "billing" when the vault has modules/Billing/: one module, one namespace, on any file system.
+  const spelled = ns === 'root' ? null : index.modules.find((m) => m.name.toLowerCase() === ns.toLowerCase())
+    || index.records.find((r) => r.ns.toLowerCase() === ns.toLowerCase());
+  if (spelled) ns = spelled.name ?? spelled.ns;
   const supersedes = list(flags.supersedes).map((raw) => {
     const id = resolveId(index, raw, ns);
     if (!id) throw new Fail(`--supersedes ${raw} does not match any record`);

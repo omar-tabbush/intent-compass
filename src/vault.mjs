@@ -6,6 +6,7 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { splitFrontmatter, sections, unwiki } from './fm.mjs';
 import { normalizePath } from './glob.mjs';
+import { fileNumber } from './ids.mjs';
 
 export const TODO_WHY = 'TODO — not recorded. Ask the human why; do not guess.';
 
@@ -33,41 +34,53 @@ export function listMarkdown(dir) {
 export function classify(rel) {
   const segs = rel.split('/');
   const file = segs.at(-1);
-  const di = segs.slice(0, -1).findIndex((s) => /^decisions$/i.test(s));
-  if (di !== -1) {
-    const mi = segs.findIndex((s) => /^modules$/i.test(s));
-    const ns = mi !== -1 && mi + 2 === di ? segs[mi + 1] : 'root';
-    return { kind: 'record', ns };
-  }
+  const dirs = segs.slice(0, -1);
   const mi = segs.findIndex((s) => /^modules$/i.test(s));
+  // modules/<m>/decisions/… first, so a module may even be called "decisions".
+  if (mi !== -1 && dirs.length > mi + 2 && /^decisions$/i.test(segs[mi + 2])) return { kind: 'record', ns: segs[mi + 1] };
+  const di = dirs.findIndex((s) => /^decisions$/i.test(s));
+  if (di !== -1 && (mi === -1 || di < mi)) return { kind: 'record', ns: 'root' };
   if (mi !== -1) {
     const rest = segs.slice(mi + 1);
     const base = file.replace(/\.md$/i, '');
     if (rest.length === 2 && rest[0] === base) return { kind: 'module', name: base };
     if (rest.length === 1) return { kind: 'module', name: base };
   }
+  if (di !== -1) return { kind: 'record', ns: 'root' };
   if (segs.length >= 2 && /^daily$/i.test(segs.at(-2)) && /^\d{4}-\d{2}-\d{2}\.md$/.test(file)) {
     return { kind: 'daily', date: file.slice(0, 10) };
   }
   return { kind: 'other' };
 }
 
+const STATUS_TABLE = [
+  [/^(accept|approv|decided|built|done|active|adopt|implement|agreed|final|shipped|live)/, 'accepted'],
+  [/^(supersed|replaced)/, 'superseded'],
+  [/^(deprecat|obsolete|retired|rejected|abandon|withdrawn|reverted|dropped)/, 'deprecated'],
+  [/^(propos|draft|pending|open|todo|wip|idea|suggest|review)/, 'proposed'],
+];
+// "Not accepted", "no longer active", "never implemented", "unapproved".
+const NEGATED = /^(?:not|no|non|never)\b|\bno longer\b|\b(?:not|never|non|un)[\s-]*(?:accept|approv|adopt|implement|agreed|decided)/;
+const ACCEPT_WORD = /(accept|approv|adopt|implement|agreed|decided|active|final|live)/;
+const REJECT_WORD = /^(reject|abandon|withdrawn|deprecat|obsolete|retired|dropped|reverted)/;
+
 // Free-text status -> one of proposed | accepted | superseded | deprecated | unknown.
+// A negated or rejected status never reads as accepted: an agent would follow it as a rule.
 export function normalizeStatus(raw) {
   const s = String(unwiki(raw) ?? '').toLowerCase().trim();
   if (!s) return 'unknown';
+  if (NEGATED.test(s)) return ACCEPT_WORD.test(s) ? 'deprecated' : 'unknown';
+  const words = s.split(/[^a-z]+/).filter(Boolean);
   const first = s.split(/[\s(,;:—-]+/)[0];
-  const table = [
-    [/^(accept|approv|decided|built|done|active|adopt|implement|agreed|final|shipped|live)/, 'accepted'],
-    [/^(supersed|replaced)/, 'superseded'],
-    [/^(deprecat|obsolete|retired|rejected|abandon|withdrawn|reverted|dropped)/, 'deprecated'],
-    [/^(propos|draft|pending|open|todo|wip|idea|suggest|review)/, 'proposed'],
-  ];
-  for (const [re, v] of table) if (re.test(first)) return v;
-  if (/in progress/.test(s)) return 'proposed';
+  let v = null;
+  for (const [re, st] of STATUS_TABLE) if (re.test(first)) { v = st; break; }
+  if (!v && /in progress/.test(s)) v = 'proposed';
+  // "Proposal rejected", "Draft (abandoned)": the proposal is over.
+  if ((v === null || v === 'proposed') && words.some((w) => REJECT_WORD.test(w))) return 'deprecated';
+  if (v) return v;
   // "Design approved": the first word that means something wins.
-  for (const word of s.split(/[^a-z]+/).filter(Boolean)) {
-    for (const [re, v] of table) if (re.test(word)) return v;
+  for (const word of words) {
+    for (const [re, st] of STATUS_TABLE) if (re.test(word)) return st;
   }
   return 'unknown';
 }
@@ -84,16 +97,28 @@ export function metaKey(k) {
   return k.trim().toLowerCase().replace(/\s+/g, '-');
 }
 
+// "- Supersedes:" with nothing after it; its value is on the indented lines below.
+const EMPTY_META_RES = [
+  /^\s*[-*]\s+\*\*([A-Za-z][\w -]{0,30}?):?\*\*:?\s*$/,
+  /^\s*[-*]\s+([A-Za-z][\w -]{0,30}?):\s*$/,
+  /^\s*\*\*([A-Za-z][\w -]{0,30}?):?\*\*:?\s*$/,
+];
+
 function bodyMeta(body) {
   const meta = {};
+  let open = null; // the key whose value may go on over indented lines
   for (const line of body.split(/\r?\n/)) {
     if (/^##\s/.test(line)) break;
-    const m = BODY_META_RES.map((re) => line.match(re)).find(Boolean);
+    const m = BODY_META_RES.map((re) => line.match(re)).find(Boolean) || EMPTY_META_RES.map((re) => line.match(re)).find(Boolean);
     if (m) {
       const k = metaKey(m[1]);
-      if (!(k in meta)) meta[k] = m[2].trim();
-    }
+      open = k in meta ? null : k;
+      if (open) meta[k] = (m[2] ?? '').trim();
+    } else if (open && /^\s{2,}\S/.test(line) && !/^\s*[-*]\s/.test(line) && !/^\s*\*\*/.test(line)) {
+      meta[open] = `${meta[open]} ${line.trim()}`.trim();
+    } else open = null;
   }
+  for (const [k, v] of Object.entries(meta)) if (v === '') delete meta[k];
   return meta;
 }
 
@@ -152,10 +177,9 @@ export function parseRecord(rel, text, { ns = 'root', moduleNames = new Set() } 
   const meta = { ...bm, ...foldKeys(data) };
   const secs = sections(body);
   const file = rel.split('/').at(-1).replace(/\.md$/i, '');
-  const numMatch = file.match(/^(\d+)(?=[-_ ]|$)/);
   const rawId = meta.id !== undefined && meta.id !== null ? String(unwiki(meta.id)).trim() : '';
   let id;
-  let num = numMatch ? numMatch[1] : null;
+  let num = fileNumber(file);
   if (rawId.includes('/')) id = rawId;
   else if (/^\d+$/.test(rawId)) { num = rawId.padStart(4, '0'); id = `${ns}/${num}`; }
   else if (rawId) id = `${ns}/${rawId}`;
@@ -197,11 +221,23 @@ export function parseRecord(rel, text, { ns = 'root', moduleNames = new Set() } 
   };
 }
 
+// YYYY-MM-DD that is a real calendar day.
+export function validDate(s) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(s + 'T00:00:00Z');
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
+// The first real date in v: "2026-10-01", or eight digits "20261001" standing alone.
 function dateOf(v) {
   if (!v) return null;
-  const m = String(v).match(/(\d{4}-\d{2}-\d{2})/) || String(v).match(/(?:^|\D)(\d{4})(\d{2})(\d{2})(?:\D|$)/);
-  if (!m) return null;
-  return m.length === 2 ? m[1] : `${m[1]}-${m[2]}-${m[3]}`;
+  const s = String(v);
+  for (const m of s.matchAll(/(\d{4}-\d{2}-\d{2})/g)) if (validDate(m[1])) return m[1];
+  for (const m of s.matchAll(/(?:^|\D)(?=(\d{4})(\d{2})(\d{2})(?:\D|$))/g)) {
+    const d = `${m[1]}-${m[2]}-${m[3]}`;
+    if (validDate(d)) return d;
+  }
+  return null;
 }
 
 export function parseModule(rel, text, name) {
@@ -214,6 +250,14 @@ export function parseModule(rel, text, name) {
     title: String(data.title || secs.title || name),
     governs: list(data.governs).map((g) => normalizePath(unwiki(g))),
   };
+}
+
+// A file in a decisions folder that is a record, not a README or loose note: it has a number,
+// a status, a declared id or a "## Decision" section, and is not named README or index.
+export function looksLikeRecord(p, body) {
+  const base = p.path.split('/').at(-1).replace(/\.md$/i, '');
+  if (/^(readme|index)$/i.test(base)) return false;
+  return Boolean(p.num || p.statusRaw.trim() || p.id !== `${p.ns}/${base}` || /^##\s+decision\b/im.test(body));
 }
 
 export function loadVault(ctx) {
@@ -230,8 +274,12 @@ export function loadVault(ctx) {
   const moduleNames = new Set(out.modules.map((m) => m.name));
   for (const [rel, k] of kinds) {
     if (k.kind === 'record') {
-      try { out.records.push(parseRecord(rel, readFileSync(join(dir, rel), 'utf8'), { ns: k.ns, moduleNames })); }
-      catch (e) { out.problems.push({ kind: 'parse', path: rel, message: e.message }); }
+      try {
+        const text = readFileSync(join(dir, rel), 'utf8');
+        const r = parseRecord(rel, text, { ns: k.ns, moduleNames });
+        if (looksLikeRecord(r, splitFrontmatter(text).body)) out.records.push(r);
+        else out.problems.push({ kind: 'parse', path: rel, message: 'not a decision record (no number, status or ## Decision); skipped' });
+      } catch (e) { out.problems.push({ kind: 'parse', path: rel, message: e.message }); }
     } else if (k.kind === 'daily') out.dailies.push({ date: k.date, path: rel });
   }
   return out;

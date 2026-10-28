@@ -11,12 +11,33 @@ export function region(name, content) {
   return `${start(name)}\n${content.trim()}\n${end(name)}`;
 }
 
-export function replaceRegion(text, name, content) {
-  const a = text.indexOf(start(name));
-  const b = text.indexOf(end(name));
-  if (a === -1 || b === -1 || b < a) return null;
-  return text.slice(0, a) + region(name, content) + text.slice(b + end(name).length);
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Marker lines only: a marker quoted in prose is just text.
+function markerLines(text, marker) {
+  const re = new RegExp(`^[ \\t]*${escapeRe(marker)}[ \\t]*(?=\\r?$)`, 'gm');
+  return [...text.matchAll(re)].map((m) => ({ at: m.index, end: m.index + m[0].length }));
 }
+
+// null when the note has exactly one start line before one end line, or no markers at all;
+// otherwise the marker counts. A rewrite of anything else could cut the user's text.
+export function brokenRegion(text, name) {
+  const a = markerLines(text, start(name));
+  const b = markerLines(text, end(name));
+  if (!a.length && !b.length) return null;
+  if (a.length === 1 && b.length === 1 && b[0].at >= a[0].end) return null;
+  return `${a.length} start and ${b.length} end marker${b.length === 1 ? '' : 's'}`;
+}
+
+export function replaceRegion(text, name, content) {
+  const a = markerLines(text, start(name));
+  const b = markerLines(text, end(name));
+  if (a.length !== 1 || b.length !== 1 || b[0].at < a[0].end) return null;
+  return text.slice(0, a[0].at) + region(name, content) + text.slice(b[0].end);
+}
+
+// Text from a record or note shown inside a region: an HTML comment in it must not end the region.
+const inert = (s) => String(s).replace(/<!--/g, '&lt;!--').replace(/-->/g, '--&gt;');
 
 export function wikilink(record) {
   return `[[${record.path.replace(/\.md$/i, '')}|${record.id}]]`;
@@ -25,7 +46,7 @@ export function wikilink(record) {
 function line(r) {
   const st = r.effectiveStatus === r.status ? r.effectiveStatus : `${r.status} → ${r.effectiveStatus}`;
   const by = r.supersededBy.length ? `, superseded by ${r.supersededBy.join(', ')}` : '';
-  return `- ${wikilink(r)} — ${r.title} *(${st}${by})*`;
+  return `- ${wikilink(r)} — ${inert(r.title)} *(${st}${by})*`;
 }
 
 export function moduleDecisions(index, name) {
@@ -41,8 +62,8 @@ export function hubContent(index) {
   out.push('', '## Modules', '');
   if (!index.modules.length) out.push('_None yet._');
   for (const m of index.modules) {
-    const gov = m.governs.length ? ` — governs \`${m.governs.join('`, `')}\`` : ' — governs nothing yet';
-    out.push(`- [[${m.path.replace(/\.md$/i, '')}|${m.name}]] (${m.decisions.length})${gov}`);
+    const gov = m.governs.length ? ` — governs \`${m.governs.map(inert).join('`, `')}\`` : ' — governs nothing yet';
+    out.push(`- [[${m.path.replace(/\.md$/i, '')}|${inert(m.name)}]] (${m.decisions.length})${gov}`);
   }
   const root = index.records.filter((r) => r.ns === 'root');
   out.push('', '## Cross-cutting decisions', '');
@@ -56,6 +77,7 @@ export function hubContent(index) {
 export const HUB_FILE = 'intent-vault.md';
 
 // Rewrite the hub and every module note that carries markers. Returns changed vault-relative paths.
+// A note with broken markers is left alone and reported in index.problems.
 export function syncGenerated(ctx, index) {
   const changed = [];
   const update = (rel, name, content) => {
@@ -63,7 +85,10 @@ export function syncGenerated(ctx, index) {
     if (!existsSync(file)) return;
     const text = readFileSync(file, 'utf8');
     const next = replaceRegion(text, name, content);
-    if (next !== null && next !== text) { writeFileSync(file, next); changed.push(rel); }
+    if (next === null) {
+      const broken = brokenRegion(text, name);
+      if (broken) index.problems.push({ kind: 'broken-markers', path: rel, message: `intent:generated:${name} has ${broken}; fix them by hand` });
+    } else if (next !== text) { writeFileSync(file, next); changed.push(rel); }
   };
   update(HUB_FILE, 'hub', hubContent(index));
   for (const m of index.modules) update(m.path, 'decisions', moduleDecisions(index, m.name));

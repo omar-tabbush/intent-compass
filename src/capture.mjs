@@ -10,7 +10,7 @@ import { ACTIVE, governing, loadIndex, refresh } from './index.mjs';
 import { freeNumber, nextNumber, recordRelPath, slugify } from './ids.mjs';
 import { isoDate, renderRecord, reviewDateFor } from './record.mjs';
 import { wikilink } from './generated.mjs';
-import { clearSession, readSession } from './session.mjs';
+import { claimSession, clearSession, readSession } from './session.mjs';
 
 export const TODO_DECISION = 'TODO — state the rule this change follows, in the present tense.';
 const RULES_NAMES = new Set(['AGENTS.md', 'CLAUDE.md']);
@@ -20,16 +20,24 @@ export function inVault(ctx, rel) {
   return ctx.vaultInRepo && ctx.vaultRel !== '.' && isUnder(rel, ctx.vaultRel);
 }
 
-// Repo-relative posix path of p (absolute, or relative to base), or null when it is outside the repo.
+// A newline (or any control character) in a file name could plant markdown in a record.
+const CONTROL = /[\x00-\x1f\x7f]/;
+
+// Repo-relative posix path of p (absolute, or relative to base), or null when it is outside the
+// repo or has control characters in it.
 export function repoPath(ctx, p, base = ctx.root) {
   const rel = ctx.rel(String(p), base);
-  return rel && rel !== '..' && !rel.startsWith('../') && !isAbsolute(rel) ? normalizePath(rel) : null;
+  return rel && rel !== '..' && !rel.startsWith('../') && !isAbsolute(rel) && !CONTROL.test(rel) ? normalizePath(rel) : null;
 }
+
+// Text from paths put into markdown: one line, always.
+export const mdSafe = (s) => String(s).replace(/[\x00-\x1f\x7f]/g, ' ');
 
 function skipFile(ctx, rel) {
   if (!rel || rel.startsWith('..') || isAbsolute(rel)) return true;
   if (inVault(ctx, rel)) return true;
   if (rel === CONFIG_FILE || isUnder(rel, '.claude') || isUnder(rel, '.git')) return true;
+  if (rel.split('/').at(-1) === '.gitignore') return true; // ignore rules are tooling config, not a decision
   if (RULES_NAMES.has(rel.split('/').at(-1)) || (ctx.config.rulesFiles || []).includes(rel)) return true;
   return (ctx.config.ignore || []).some((g) => matchPath(g, rel));
 }
@@ -51,7 +59,9 @@ function collect(ctx, since, extraFiles) {
   for (const f of extraFiles) { const r = repoPath(ctx, f); if (r) all.add(r); }
   const changed = [];
   const deleted = [];
+  const unsafe = [];
   for (const rel of [...all].sort()) {
+    if (CONTROL.test(rel)) { unsafe.push(rel); continue; }
     if (skipFile(ctx, rel)) continue;
     const file = join(ctx.root, rel);
     if (existsSync(file)) {
@@ -63,12 +73,13 @@ function collect(ctx, since, extraFiles) {
     }
     changed.push(rel);
   }
-  return { changed, deleted };
+  return { changed, deleted, unsafe };
 }
 
 // First config.areaDepth folders under the code root. A file above that level is governed by its exact path.
 function codeArea(ctx, rel) {
-  const depth = Math.max(1, parseInt(ctx.config.areaDepth, 10) || 1);
+  const d = Number(ctx.config.areaDepth);
+  const depth = Number.isInteger(d) && d >= 0 ? d : 1; // the same rule as check's areaFolders()
   const roots = (ctx.config.codeRoots || [])
     .map((r) => normalizePath(r).replace(/\/$/, '').replace(/^\.$/, ''))
     .sort((a, b) => b.length - a.length);
@@ -77,7 +88,7 @@ function codeArea(ctx, rel) {
     const folders = (root ? rel.slice(root.length + 1) : rel).split('/').slice(0, -1);
     if (folders.length >= depth) {
       const area = [root, ...folders.slice(0, depth)].filter(Boolean).join('/');
-      return { area, glob: `${area}/**` };
+      return area ? { area, glob: `${area}/**` } : { area: '.', glob: '**' };
     }
     return { area: [root, ...folders].filter(Boolean).join('/') || '.', glob: null };
   }
@@ -111,11 +122,11 @@ function groupOf(ctx, g, rel) {
 const direct = (reason) => reason.startsWith('governs ') || reason.startsWith('in module ');
 
 export function areaLabel(area) {
-  return area === '.' ? 'the repo root' : area;
+  return area === '.' ? 'the repo root' : mdSafe(area);
 }
 
 function contextText(files, deleted, date, since) {
-  const listed = files.slice(0, MAX_LISTED).map((f) => `- \`${f}\`${deleted.has(f) ? ' (deleted)' : ''}`);
+  const listed = files.slice(0, MAX_LISTED).map((f) => `- \`${mdSafe(f)}\`${deleted.has(f) ? ' (deleted)' : ''}`);
   if (files.length > MAX_LISTED) listed.push(`- ... and ${files.length - MAX_LISTED} more`);
   const from = since ? `changes since ${since}` : 'the working tree and the session touch list';
   return [`Captured by intent capture on ${date} from ${from}. Changed files:`, '', ...listed].join('\n');
@@ -151,31 +162,35 @@ function appendDaily(ctx, date, proposals, touched) {
   const rel = `daily/${date}.md`;
   const file = join(ctx.vaultDir, rel);
   mkdirSync(dirname(file), { recursive: true });
-  let lead = '\n';
-  if (!existsSync(file)) appendFileSync(file, `# ${date}\n`);
-  else if (!readFileSync(file, 'utf8').endsWith('\n')) lead = '\n\n';
-  const lines = [`${lead}## Captured by intent`, ''];
+  const lines = [];
   for (const p of proposals) {
     lines.push(`- Proposed ${wikilink({ id: p.id, path: p.vaultPath })} for ${areaLabel(p.area)} (${p.files.length} file${p.files.length === 1 ? '' : 's'})`);
   }
   for (const t of touched) {
     lines.push(`- Changed code governed by ${wikilink({ id: t.id, path: t.vaultPath })} (${t.files.length} file${t.files.length === 1 ? '' : 's'})`);
   }
-  appendFileSync(file, lines.join('\n') + '\n');
+  const body = lines.join('\n');
+  const text = existsSync(file) ? readFileSync(file, 'utf8') : null;
+  // Every Stop runs capture: a section that says exactly what the last one said adds nothing.
+  if (text !== null && text.trimEnd().endsWith(`## Captured by intent\n\n${body}`)) return rel;
+  if (text === null) appendFileSync(file, `# ${date}\n`);
+  const lead = text === null || text.endsWith('\n') ? '\n' : '\n\n';
+  appendFileSync(file, `${lead}## Captured by intent\n\n${body}\n`);
   return rel;
 }
 
 export function capture(ctx, { now = new Date(), since = null, dryRun = false, extraFiles = [] } = {}) {
   checkSince(ctx, since);
-  const { changed, deleted } = collect(ctx, since, extraFiles);
-  const result = { changed, deleted, proposals: [], governedTouched: [], skipped: [], daily: null, dryRun: !!dryRun };
+  if (!dryRun) claimSession(ctx);
+  const { changed, deleted, unsafe } = collect(ctx, since, extraFiles);
+  const result = { changed, deleted, proposals: [], governedTouched: [], skipped: unsafe.map((path) => ({ area: null, path, reason: 'control characters in path' })), daily: null, dryRun: !!dryRun };
   if (!changed.length) return result;
 
   const index = loadIndex(ctx);
   const groups = new Map();
   const touched = new Map();
   for (const rel of changed) {
-    const g = governing(index, ctx, rel);
+    const g = governing(index, ctx, rel, { isDir: false }); // collect() skipped folders already
     const at = groupOf(ctx, g, rel);
     if (!groups.has(at.key)) groups.set(at.key, { ...at, files: [], governs: new Set(), active: new Set(), proposed: new Set() });
     const grp = groups.get(at.key);

@@ -74,7 +74,7 @@ test('hook PreToolUse: governed file gets context once per session, never a perm
     assert.deepEqual(Object.keys(doc.hookSpecificOutput), ['hookEventName', 'additionalContext']);
     assert.equal(doc.hookSpecificOutput.hookEventName, 'PreToolUse');
     const text = doc.hookSpecificOutput.additionalContext;
-    assert.ok(text.startsWith('Intent Compass: src/billing/refunds/r.ts is governed by recorded decisions. Read them before editing and do not break them without asking the user:\n'));
+    assert.ok(text.startsWith('Intent Compass: you just edited src/billing/refunds/r.ts, which is governed by recorded decisions. Read them now; if your edit breaks an accepted one, tell the user and revert or ask before going on:\n'), text);
     assert.match(text, /^- billing\/0001 \(accepted\): Refunds go back to the original method -> intent-vault\/modules\/billing\/decisions\/0001-refunds\.md$/m);
     assert.match(text, /^- module note billing: intent-vault\/modules\/billing\/billing\.md$/m);
     assert.doesNotMatch(text, /billing\/0002/, 'proposed records are not shown');
@@ -117,7 +117,7 @@ test('hook PreToolUse: superseded records are not listed; relative paths and Not
   try {
     const out = await hook(root, { session_id: 's1', cwd: join(root, 'src'), hook_event_name: 'PreToolUse', tool_name: 'NotebookEdit', tool_input: { notebook_path: 'ml/nb.ipynb' } });
     const text = JSON.parse(out).hookSpecificOutput.additionalContext;
-    assert.match(text, /src\/ml\/nb\.ipynb is governed/);
+    assert.match(text, /src\/ml\/nb\.ipynb, which is governed/);
     assert.match(text, /root\/0002 \(accepted\)/);
     assert.doesNotMatch(text, /root\/0001/);
   } finally {
@@ -130,7 +130,7 @@ test('hook PreToolUse: a module note alone is pointed at; symlinked cwd still ma
   try {
     const out = await hook(root, { ...edit(root, 'src/feed/f.ts'), cwd: realpathSync(root) });
     const text = JSON.parse(out).hookSpecificOutput.additionalContext;
-    assert.match(text, /^Intent Compass: src\/feed\/f\.ts is in a module with notes\./);
+    assert.match(text, /^Intent Compass: you just edited src\/feed\/f\.ts, which is in a module with notes\. Read them now:/);
     assert.match(text, /^- module note feed: intent-vault\/modules\/feed\/feed\.md$/m);
     writeFileSync(join(root, 'intent-vault/.cache/hook-s2.json'), '"corrupt"');
     assert.notEqual(await hook(root, edit(root, 'src/feed/f.ts', { session_id: 's2' })), '', 'corrupt state is treated as empty');
@@ -164,15 +164,17 @@ test('hook PostToolUse: touches the file, prints nothing', async () => {
   }
 });
 
-test('hook Stop: drafts proposals and blocks once, never twice', async () => {
-  const root = governedRepo({ 'src/search/s.ts': 's' });
+test('hook Stop: drafts proposals and blocks once, never twice; later Stops still capture', async () => {
+  const root = governedRepo({ 'src/search/s.ts': 's', 'src/feed/f.ts': 'f' });
   try {
     await hook(root, post(root, 'src/payments/p.ts'));
     const out = await hook(root, stopEvent(root));
     const doc = JSON.parse(out);
     assert.deepEqual(Object.keys(doc), ['decision', 'reason']);
     assert.equal(doc.decision, 'block');
-    assert.match(doc.reason, /^Intent Compass drafted 1 proposed decision record\(s\) for code changed in this session that has no recorded intent: intent-vault\/decisions\/0001-captured-src-payments\.md\./);
+    assert.match(doc.reason, /^Intent Compass drafted 1 proposed decision record\(s\) for uncommitted or recently touched code that has no recorded intent: root\/0001 \(intent-vault\/decisions\/0001-captured-src-payments\.md\)\./);
+    assert.match(doc.reason, /may predate this session/);
+    assert.match(doc.reason, /frontmatter `title:` line and in the `# ` heading/);
     assert.match(doc.reason, /provenance: ai-suggested/);
     assert.match(doc.reason, /intent accept <id>/);
     assert.match(doc.reason, /do not delete it/);
@@ -185,7 +187,9 @@ test('hook Stop: drafts proposals and blocks once, never twice', async () => {
 
     await hook(root, post(root, 'src/search/s.ts'));
     assert.equal(await hook(root, stopEvent(root)), '', 'already blocked this session');
-    assert.equal(exists(root, 'intent-vault/decisions/0002-captured-src-search.md'), false, 'no capture after the block');
+    assert.ok(exists(root, 'intent-vault/decisions/0002-captured-src-search.md'), 'captured in its own session, without a second block');
+    assert.deepEqual(readSession(loadContext(root)).files, []);
+    await hook(root, post(root, 'src/feed/f.ts', { session_id: 's2' }));
     assert.notEqual(await hook(root, stopEvent(root, { session_id: 's2' })), '', 'a new session may block once');
   } finally {
     cleanup(root);
@@ -252,10 +256,124 @@ test('hook: real subprocess prints a single JSON document or nothing', () => {
 });
 
 test('hook: stop reason stays under 900 chars with many proposals', () => {
-  const paths = Array.from({ length: 40 }, (_, i) => `intent-vault/modules/payments-and-refunds/decisions/${String(i + 1).padStart(4, '0')}-captured-src-area-${i}.md`);
+  const paths = Array.from({ length: 40 }, (_, i) => ({ id: `payments-and-refunds/${String(i + 1).padStart(4, '0')}`, path: `intent-vault/modules/payments-and-refunds/decisions/${String(i + 1).padStart(4, '0')}-captured-src-area-${i}.md` }));
   const reason = stopReason(paths, 'intent-vault/daily/2026-10-27.md');
   assert.ok(reason.length <= 900, `${reason.length}`);
   assert.match(reason, /drafted 40 proposed/);
   assert.match(reason, /and \d+ more \(all listed in intent-vault\/daily\/2026-10-27\.md\)/);
   assert.match(reason, /intent accept <id>/);
+});
+
+test('hook: a command module that fails to load still exits 0 with no output, anywhere', async () => {
+  const { cpSync, readFileSync: rf } = await import('node:fs');
+  const { spawnSync } = await import('node:child_process');
+  const copy = tempDir();
+  const dir = tempDir();
+  try {
+    cpSync(join(ROOT, 'bin'), join(copy, 'bin'), { recursive: true });
+    cpSync(join(ROOT, 'src'), join(copy, 'src'), { recursive: true });
+    const cap = join(copy, 'src/capture.mjs');
+    writeFileSync(cap, rf(cap, 'utf8').replace('export function inVault', 'function inVault'));
+    const go = (input) => spawnSync('node', [join(copy, 'bin/intent.mjs'), 'hook'], { cwd: dir, input, encoding: 'utf8' });
+    for (const input of ['{}', JSON.stringify(edit(dir, 'a.ts')), JSON.stringify(stopEvent(dir))]) {
+      const r = go(input);
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(r.stdout, '');
+      assert.equal(r.stderr, '');
+    }
+    const glob = join(copy, 'src/glob.mjs');
+    writeFileSync(glob, rf(glob, 'utf8') + '\nexport const broken = ;\n');
+    const r = go('{}');
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout + r.stderr, '');
+    const other = spawnSync('node', [join(copy, 'bin/intent.mjs'), 'why', 'a.ts'], { cwd: dir, encoding: 'utf8' });
+    assert.equal(other.status, 2, 'other commands still report the load error');
+    assert.match(other.stderr, /^intent: /);
+  } finally {
+    cleanup(copy);
+    cleanup(dir);
+  }
+});
+
+test('hook PreToolUse: a subagent gets the context too, once per agent', async () => {
+  const root = governedRepo();
+  try {
+    assert.notEqual(await hook(root, edit(root, 'src/billing/refunds/r.ts')), '');
+    const sub = { agent_id: 'a-123', agent_type: 'general-purpose' };
+    assert.notEqual(await hook(root, edit(root, 'src/billing/refunds/r.ts', sub)), '', 'a subagent has its own context window');
+    assert.equal(await hook(root, edit(root, 'src/billing/refunds/r.ts', sub)), '');
+    const long = { agent_id: 'b'.repeat(150) };
+    const other = { agent_id: `${'b'.repeat(150)}x` };
+    assert.notEqual(await hook(root, edit(root, 'src/billing/refunds/r.ts', long)), '');
+    assert.notEqual(await hook(root, edit(root, 'src/billing/refunds/r.ts', other)), '', 'long ids do not collide');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('hook Stop: repeated Stops add one daily section, not one per turn', async () => {
+  const root = governedRepo();
+  try {
+    await hook(root, post(root, 'src/billing/refunds/r.ts'));
+    for (let i = 0; i < 3; i++) {
+      await hook(root, stopEvent(root));
+      await hook(root, post(root, 'src/billing/refunds/r.ts'));
+    }
+    const daily = read(root, 'intent-vault/daily/2026-10-27.md');
+    assert.equal(daily.split('## Captured by intent').length - 1, 1, daily);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('hook PreToolUse: a mention of a whole code root is not presented as governance', async () => {
+  const root = makeRepo({
+    'src/search/rank.js': '',
+    'src/payments/refund.js': '',
+    'intent-vault/decisions/0001-layout.md': record({ id: 'root/0001', title: 'Code lives in one tree' }).replace('Some context.', 'All code is under `src/`.'),
+    'intent-vault/decisions/0002-rank.md': record({ id: 'root/0002', title: 'Ranking is stable' }).replace('Some context.', 'See `src/search/rank.js`.'),
+  });
+  try {
+    assert.equal(await hook(root, edit(root, 'src/payments/refund.js')), '');
+    const text = JSON.parse(await hook(root, edit(root, 'src/search/rank.js'))).hookSpecificOutput.additionalContext;
+    assert.match(text, /root\/0002/);
+    assert.doesNotMatch(text, /root\/0001/);
+    const why = JSON.parse((await run(root, ['why', 'src/payments/refund.js', '--json'])).stdout).paths[0];
+    assert.deepEqual(why.records.map((r) => r.id), ['root/0001'], 'still listed by intent why');
+    assert.deepEqual(why.read, [], 'but not as a file to read before editing');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('hook: a huge stdin is dropped quietly instead of crashing', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { makeIO } = await import('../src/io.mjs');
+  const stdin = new EventEmitter();
+  stdin.setEncoding = () => {};
+  stdin.destroy = () => {};
+  const io = makeIO({ stdin, env: {} });
+  const p = io.readStdin();
+  const chunk = 'a'.repeat(1024 * 1024);
+  for (let i = 0; i < 20; i++) stdin.emit('data', chunk);
+  stdin.emit('end');
+  assert.equal(await p, '');
+});
+
+test('hook PostToolUse: parallel touches are all kept', async () => {
+  const { spawn } = await import('node:child_process');
+  const files = {};
+  for (let i = 0; i < 12; i++) files[`src/f${i}/x.ts`] = 'x';
+  const root = governedRepo(files);
+  try {
+    const one = (i) => new Promise((resolve) => {
+      const child = spawn('node', [BIN, 'hook'], { cwd: root, env: { ...process.env, INTENT_NOW: NOW } });
+      child.on('close', resolve);
+      child.stdin.end(JSON.stringify(post(root, `src/f${i}/x.ts`)));
+    });
+    await Promise.all(Array.from({ length: 12 }, (_, i) => one(i)));
+    assert.equal(readSession(loadContext(root)).files.length, 12);
+  } finally {
+    cleanup(root);
+  }
 });

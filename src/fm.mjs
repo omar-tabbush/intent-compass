@@ -6,13 +6,14 @@ const FM_RE = /^\uFEFF?---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)/;
 
 export function splitFrontmatter(text) {
   const m = text.match(FM_RE);
-  if (!m) return { data: {}, body: text, hasFrontmatter: false };
+  if (!m) return { data: {}, body: text.replace(/^\uFEFF/, ''), hasFrontmatter: false };
   return { data: parseYaml(m[1] ?? ''), body: text.slice(m[0].length), hasFrontmatter: true };
 }
 
 export function parseYaml(src) {
   const data = {};
   let key = null;
+  let block = null; // '>' (folded) or '|' (literal) while reading a block scalar's lines
   for (const line of src.split(/\r?\n/)) {
     if (!line.trim() || /^\s*#/.test(line)) continue;
     const item = line.match(/^\s*-\s+(.*)$/) || line.match(/^\s*-$/);
@@ -24,13 +25,16 @@ export function parseYaml(src) {
     const kv = !/^\s/.test(line) && line.match(/^([^\s:#][^:]*?)\s*:(?:\s+(.*)|\s*)$/);
     if (kv) {
       key = kv[1].trim();
-      data[key] = value(kv[2] ?? '');
+      const indicator = stripComment((kv[2] ?? '').trim());
+      block = /^[|>][+-]?\d*$/.test(indicator) ? indicator[0] : null;
+      data[key] = block ? '' : value(kv[2] ?? '');
       continue;
     }
-    // Nested map or folded text: keep it raw under the current key.
+    // A block scalar's text, or a nested map kept raw under the current key.
     if (key !== null) {
       const prev = data[key];
-      data[key] = (typeof prev === 'string' && prev ? prev + '\n' : '') + line.trim();
+      const sep = block === '>' ? ' ' : '\n';
+      data[key] = (typeof prev === 'string' && prev ? prev + sep : '') + line.trim();
     }
   }
   return data;
@@ -91,7 +95,8 @@ function splitList(inner) {
   }
 }
 
-const PLAIN = /^[A-Za-z0-9_./@][A-Za-z0-9_ ./@()+-]*$/;
+// "@" may not start a plain YAML scalar (it is reserved), so "@scope/pkg" is quoted.
+const PLAIN = /^[A-Za-z0-9_./][A-Za-z0-9_ ./@()+-]*$/;
 
 function fmt(v) {
   if (v === null || v === undefined) return '';

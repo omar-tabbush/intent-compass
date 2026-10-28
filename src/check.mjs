@@ -54,7 +54,8 @@ export function analyze(ctx, index, { now = new Date(), lastChange = new Map(), 
   });
   // Round once at the end so fractional penalties (areas, 0.5 each) do not drift the total.
   const lost = penalties.reduce((s, p) => s + p.penalty, 0);
-  const score = Math.max(0, Math.min(100, Math.round(100 - lost)));
+  let score = Math.max(0, Math.min(100, Math.round(100 - lost)));
+  if (lost > 0 && score === 100) score = 99; // 100 means no debt at all: a listed penalty never rounds away
   for (const p of penalties) p.penalty = Math.round(p.penalty * 100) / 100;
 
   return {

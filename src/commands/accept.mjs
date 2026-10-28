@@ -3,10 +3,11 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadContext, vaultPath } from '../config.mjs';
+import { loadContext, vaultPath, vaultWarning } from '../config.mjs';
 import { loadIndex } from '../index.mjs';
 import { splitFrontmatter } from '../fm.mjs';
-import { BODY_META_RES, metaKey, normalizeStatus, parseRecord } from '../vault.mjs';
+import { BODY_META_RES, metaKey, parseRecord } from '../vault.mjs';
+import { usageOf } from '../cli.mjs';
 import { notOptedIn, refresh } from './_shared.mjs';
 
 // "billing 0003" may arrive as one argument or two.
@@ -61,7 +62,12 @@ function locateStatus(text) {
     if (hits.length !== 1) return { error: `expected one "status:" line in the frontmatter, found ${hits.length}` };
     const l = hits[0];
     const prefix = l.line.match(/^status[ \t]*:[ \t]+/i)[0];
-    return { start: l.start + prefix.length, end: l.end, value: l.line.slice(prefix.length) };
+    const start = l.start + prefix.length;
+    const rest = l.line.slice(prefix.length);
+    // Only the value token is rewritten: a trailing "# comment" stays. Other text after it is part of the status.
+    const tok = rest.match(/^("[^"]*"|'[^']*'|[^\s#]+)/);
+    if (tok && /^\s*(?:#.*)?$/.test(rest.slice(tok[0].length))) return { start, end: start + tok[0].length, value: tok[0] };
+    return { start, end: l.end, value: rest.replace(/\s+#.*$/, '') };
   }
   for (const l of lines(text, fmEnd, text.length)) {
     if (/^##\s/.test(l.line)) break;
@@ -78,7 +84,11 @@ function acceptFile(ctx, index, record) {
   const text = readFileSync(file, 'utf8');
   const loc = locateStatus(text);
   if (loc.error) return { error: `${record.id}: ${loc.error} in ${vaultPath(ctx, record.path)}` };
-  if (normalizeStatus(loc.value) !== 'proposed') return { error: `${record.id} is ${record.status} in ${vaultPath(ctx, record.path)}, not proposed; only proposed records can be accepted` };
+  // Only a plain "proposed" (or "draft") flips: "Proposal rejected" or "Pending removal" is a human's call.
+  const value = loc.value.trim().replace(/^(["'])(.*)\1$/, '$2');
+  if (!/^(proposed|draft)$/i.test(value)) {
+    return { error: `${record.id}: status is "${value}", not plain proposed; edit it by hand if it should be accepted (${vaultPath(ctx, record.path)})` };
+  }
   const next = text.slice(0, loc.start) + 'accepted' + text.slice(loc.end);
   // Check the reader sees exactly the edit we meant before anything is written.
   const opts = { ns: record.ns, moduleNames: new Set(index.modules.map((m) => m.name)) };
@@ -92,9 +102,11 @@ function acceptFile(ctx, index, record) {
 }
 
 export async function run({ positional, flags }, io) {
-  if (!positional.length) { io.err('usage: intent accept ID... [--json]'); return 2; }
+  if (!positional.length) { io.err(usageOf('accept')); return 2; }
   const ctx = loadContext(io.cwd);
   if (!ctx) return notOptedIn(io);
+  const warning = vaultWarning(ctx);
+  if (warning) io.err(warning);
   const index = loadIndex(ctx);
   const accepted = [];
   const errors = [];

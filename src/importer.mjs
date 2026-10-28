@@ -6,7 +6,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { splitFrontmatter, stringifyFrontmatter, unwiki } from './fm.mjs';
 import { region } from './generated.mjs';
 import { isoDate } from './record.mjs';
-import { classify, loadVault, parseModule, parseRecord } from './vault.mjs';
+import { classify, loadVault, looksLikeRecord, parseModule, parseRecord } from './vault.mjs';
 
 const TEMPLATE_DIR = /^_?templates?$/i;
 const TEMPLATE_FILE = /^(?:0+[-_ ])?_?templates?$/i;
@@ -180,10 +180,6 @@ function statusRawOf(p, data) {
   return data.status_raw ?? undefined;
 }
 
-function looksLikeRecord(p, body) {
-  return Boolean(p.num || p.statusRaw.trim() || /^##\s+decision\b/im.test(body));
-}
-
 function recordNote(from, text, ns, moduleNames, today) {
   const p = parseRecord(from, text, { ns, moduleNames });
   const { data, body, fmText } = splitSource(text);
@@ -234,8 +230,9 @@ function moduleNote(from, text, name, today) {
       ['imported_at', data.imported_at, (v) => String(v) === today],
     ]),
   };
-  // A new file in the target, so the markers are appended after the verbatim body.
-  const next = body.includes(DECISIONS_START)
+  // A new file in the target, so the markers are appended after the verbatim body
+  // (unless the note already has a marker line; one quoted in prose does not count).
+  const next = new RegExp(`^[ \\t]*${DECISIONS_START}[ \\t]*\\r?$`, 'm').test(body)
     ? body
     : body + (body === '' || body.endsWith('\n') ? '' : '\n') + '\n' + region('decisions', '') + '\n';
   return { governs: m.governs, text: compose(fm, keptBlocks(fmText, MODULE_KEYS), next) };
@@ -269,6 +266,8 @@ export function importVault(ctx, srcDir, { now = new Date(), dryRun = false } = 
   }
 
   const target = loadVault(ctx);
+  const realSrc = realish(src);
+  const realVault = realish(ctx.vaultDir);
   const moduleNames = new Set([...items.filter((i) => i.kind === 'module').map((i) => i.name), ...target.modules.map((m) => m.name)]);
   const planned = new Map();
 
@@ -286,6 +285,13 @@ export function importVault(ctx, srcDir, { now = new Date(), dryRun = false } = 
       if (sourceOf(file) === from) { out.skipped.push({ from, reason: 'already imported' }); return false; }
       out.skipped.push({ from, reason: 'target exists' });
       out.warnings.push(`${to} already exists in the vault and was not imported from ${from}; left it unchanged`);
+      return false;
+    }
+    // A folder in the vault may be a symlink: the real place written to must be in the vault, never in the source.
+    const real = realish(dirname(file));
+    if (contains(realSrc, real) || !contains(realVault, real)) {
+      out.skipped.push({ from, reason: 'target outside the vault' });
+      out.warnings.push(`${from} would be written to ${real}, which is outside the target vault or inside the source; not imported`);
       return false;
     }
     if (!dryRun) {

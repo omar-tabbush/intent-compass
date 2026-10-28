@@ -1,6 +1,6 @@
 # Intent Compass
 
-**Intent debt** is the gap between what the builders of an app meant and what is written down: the goals, rules and the *why* behind each decision. When a small team ships with AI coding agents, that why lives only in people's heads, and no later refactor can recover it. Intent Compass prevents the debt: it keeps decision records next to the code, shows agents the governing decisions before they edit a file, and drafts new records at the end of each session for a human to confirm.
+**Intent debt** is the gap between what the builders of an app meant and what is written down: the goals, rules and the *why* behind each decision. When a small team ships with AI coding agents, that why lives only in people's heads, and no later refactor can recover it. Intent Compass prevents the debt: it keeps decision records next to the code, shows agents the governing decisions when they first edit a file, and drafts new records at the end of each session for a human to confirm.
 
 It is a zero-dependency Node CLI (`intent`) plus an agent skill. It works with Claude Code (hooks + skill) and with any other agent that reads `AGENTS.md` or Agent Skills.
 
@@ -23,7 +23,7 @@ intent init --rules --hooks --skill
 ```
 
 - `--rules` writes the agent rules block into `AGENTS.md` (and `CLAUDE.md` if it exists).
-- `--hooks` adds Claude Code hooks to `.claude/settings.local.json` (personal, gitignored).
+- `--hooks` adds Claude Code hooks to `.claude/settings.local.json` (personal: added to `.gitignore`, or to `.git/info/exclude` when the repo has no `.gitignore`).
 - `--skill` copies the skill into `.claude/skills/intent-compass/`. For every project at once, copy `skill/intent-compass/` to `~/.claude/skills/` instead.
 
 Already keep an Obsidian vault? Point the vault at it with `intent init --vault ../my-vault`, or copy it in with `intent init --import ../my-vault`. Import never changes the source.
@@ -45,13 +45,15 @@ Also included:
 - `intent index` rebuilds the index.
 - `intent hook` is the Claude Code hook entry.
 
+`intent <command> --help` prints a command's flags without running it. A misspelled flag is an error, so a typo never writes anything.
+
 ### What runs when
 
 | Moment | Claude Code (hooks) | Other agents (`AGENTS.md` rules / skill) |
 |---|---|---|
-| Before an edit | `PreToolUse` injects the governing decisions once per file | agent runs `intent why <file>` |
+| First edit of a file | `PreToolUse` adds the governing decisions next to the tool result, once per file (run `intent why` before editing to see them first) | agent runs `intent why <file>` |
 | After an edit | `PostToolUse` runs `intent touch` | agent runs `intent touch <files>` |
-| End of session | `Stop` runs `intent capture`; if it drafted records, asks the agent to fill the Why **only from what the user said** | agent runs `intent capture` |
+| End of each turn | `Stop` runs `intent capture`; the first time it drafts records in a session, it asks the agent to fill the Why **only from what the user said** | agent runs `intent capture` |
 | Confirm | the user runs `intent accept <id>` | same |
 
 The hook only adds context. It never approves, denies or blocks an edit, and it is silent in any folder without `.intent.json`.
@@ -132,13 +134,13 @@ Shows `payments/0002` (accepted), `payments/0001` (superseded by it) and the fil
 intent rules && intent capture
 ```
 
-Writes the rules block, then proposes `root/0002` for the uncommitted change in `src/notifications`, with the Why left as TODO. A human fills the Why and confirms:
+Writes the rules block, then proposes `root/0002` for the uncommitted change in `src/notifications`, with the Why left as TODO. A human opens `intent-vault/decisions/0002-captured-src-notifications.md` and replaces the TODOs: the title (the frontmatter `title:` line and the `# ` heading), the Decision, and the Why in their own words. Then they confirm:
 
 ```bash
 intent accept root/0002 && intent check
 ```
 
-The score rises to 91. Open `intent-vault/` in Obsidian to browse the same records as linked notes.
+The score rises to 92. (Accepting with the Why still TODO works too, with a warning, and gives 91: the record counts as having no why.) Open `intent-vault/` in Obsidian to browse the same records as linked notes.
 
 ## Development
 

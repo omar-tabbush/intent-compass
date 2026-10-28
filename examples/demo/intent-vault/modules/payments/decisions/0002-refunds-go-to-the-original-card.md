@@ -6,7 +6,7 @@ date: 2026-05-01
 module: payments
 governs: [src/payments/refund.js]
 provenance: human
-review_date: 2026-11-01
+review_date: 2099-01-01
 supersedes: [payments/0001]
 tags: [refunds]
 ---

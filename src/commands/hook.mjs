@@ -2,7 +2,7 @@
 // call, and prints nothing unless the repo opted in and there is something to say.
 
 import { loadContext, vaultPath } from '../config.mjs';
-import { ACTIVE, governing, loadIndex } from '../index.mjs';
+import { ACTIVE, governing, loadIndex, shallowMention } from '../index.mjs';
 import { readHookState, touch, writeHookState } from '../session.mjs';
 import { capture, inVault, repoPath } from '../capture.mjs';
 
@@ -49,25 +49,35 @@ function hookState(ctx, sessionId) {
   return { ...s, shown: Array.isArray(s.shown) ? s.shown : [], blocked: s.blocked === true };
 }
 
+// A subagent has its own context window, so it gets its own "already shown" list.
+function shownKey(input) {
+  return typeof input.agent_id === 'string' && input.agent_id ? `${input.session_id}--${input.agent_id}` : input.session_id;
+}
+
+// PreToolUse context reaches the agent next to the tool result, after the edit ran: the wording says so.
 function preToolUse(ctx, cwd, input) {
   const rel = editedFile(ctx, cwd, input);
   if (!rel) return null;
-  const state = hookState(ctx, input.session_id);
+  const key = shownKey(input);
+  const state = hookState(ctx, key);
   if (state.shown.includes(rel)) return null;
   const g = governing(loadIndex(ctx), ctx, rel);
-  const records = g.items.map((it) => it.record).filter((r) => ACTIVE.has(r.effectiveStatus));
+  const records = g.items
+    .filter((it) => !shallowMention(ctx, it.reasons))
+    .map((it) => it.record)
+    .filter((r) => ACTIVE.has(r.effectiveStatus));
   if (!records.length && !g.modules.length) return null;
 
   const lines = [records.length
-    ? `Intent Compass: ${rel} is governed by recorded decisions. Read them before editing and do not break them without asking the user:`
-    : `Intent Compass: ${rel} is in a module with notes. Read them before editing:`];
+    ? `Intent Compass: you just edited ${rel}, which is governed by recorded decisions. Read them now; if your edit breaks an accepted one, tell the user and revert or ask before going on:`
+    : `Intent Compass: you just edited ${rel}, which is in a module with notes. Read them now:`];
   for (const r of records.slice(0, MAX_RECORDS)) lines.push(`- ${r.id} (${r.effectiveStatus}): ${r.title} -> ${vaultPath(ctx, r.path)}`);
   if (records.length > MAX_RECORDS) lines.push(`... run intent why ${rel} for all`);
   for (const { module } of g.modules) lines.push(`- module note ${module.name}: ${vaultPath(ctx, module.path)}`);
 
   // State first: if it cannot be saved, say nothing rather than repeat on every edit.
   state.shown.push(rel);
-  writeHookState(ctx, input.session_id, state);
+  writeHookState(ctx, key, state);
   return { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: lines.join('\n') } };
 }
 
@@ -77,23 +87,26 @@ function postToolUse(ctx, cwd, input, io) {
   return null;
 }
 
+// Capture runs on every Stop, so changes made after the one block are still drafted in their own
+// session (and its daily note); only the block itself happens at most once per session.
 function stop(ctx, input, io) {
   if (input.stop_hook_active === true) return null;
   const state = hookState(ctx, input.session_id);
-  if (state.blocked) return null;
   const res = capture(ctx, { now: io.now });
-  if (!res.proposals.length) return null;
+  if (!res.proposals.length || state.blocked) return null;
   // Written only after capture succeeded, so a failed capture can block on a later Stop.
   writeHookState(ctx, input.session_id, { ...state, blocked: true });
-  return { decision: 'block', reason: stopReason(res.proposals.map((p) => p.path), res.daily) };
+  return { decision: 'block', reason: stopReason(res.proposals, res.daily) };
 }
 
-export function stopReason(paths, daily = null) {
-  const head = (list) => `Intent Compass drafted ${paths.length} proposed decision record(s) for code changed in this session that has no recorded intent: ${list}.`;
-  const tail = ' For each: fill the Why ONLY with what the user actually said in this session (quote them) and set provenance: ai-suggested; if the user never said why, leave the TODO and ask the user. Replace the TODO title and Decision with the rule the change follows, in present tense. Do not set status: accepted — ask the user to run intent accept <id>. If a record is noise, tell the user; do not delete it.';
-  let shown = paths.length;
-  const more = (n) => ` and ${paths.length - n} more${daily ? ` (all listed in ${daily})` : ''}`;
-  const list = (n) => paths.slice(0, n).join(', ') + (n < paths.length ? more(n) : '');
+// proposals: [{ id, path }].
+export function stopReason(proposals, daily = null) {
+  const n = proposals.length;
+  const head = (list) => `Intent Compass drafted ${n} proposed decision record(s) for uncommitted or recently touched code that has no recorded intent: ${list}.`;
+  const tail = ' Some of these changes may predate this session; if the user did not discuss a change, leave its TODO and ask. For each: fill the Why ONLY with what the user actually said in this session (quote them) and set provenance: ai-suggested; otherwise leave the TODO and ask the user. Replace the TODO in the frontmatter `title:` line and in the `# ` heading, and the Decision, with the rule the change follows, in present tense. Do not set status: accepted — ask the user to run intent accept <id>. If a record is noise, tell the user; do not delete it.';
+  let shown = n;
+  const more = (k) => ` and ${n - k} more${daily ? ` (all listed in ${daily})` : ''}`;
+  const list = (k) => proposals.slice(0, k).map((p) => `${p.id} (${p.path})`).join(', ') + (k < n ? more(k) : '');
   while (shown > 1 && head(list(shown)).length + tail.length > MAX_REASON) shown--;
   return head(list(shown)) + tail;
 }

@@ -99,7 +99,8 @@ test('why: only inactive records means nothing to read, plus the hint', async ()
     assert.match(r.stdout, /proposed {4}root\/0001/);
     assert.match(r.stdout, /deprecated {2}root\/0002/);
     assert.doesNotMatch(r.stdout, /Read before editing/);
-    assert.match(r.stdout, /No active record governs src\/cart\/cart\.ts\.\nIf you make a load-bearing choice here/);
+    assert.match(r.stdout, /^ {14}governs src\/cart\/\*\* {2}\(intent-vault\/decisions\/0001-cart-ttl\.md\)$/m, 'a record not in the read list shows its file');
+    assert.match(r.stdout, /No active record governs src\/cart\/cart\.ts\.\nProposed records are waiting: ask the user to confirm one with intent accept root\/0001 before you write a new one\.$/);
   } finally {
     cleanup(root);
   }
@@ -209,5 +210,50 @@ test('why: usage without a path (exit 2); silent unless opted in (exit 1)', asyn
   } finally {
     cleanup(root);
     cleanup(bare);
+  }
+});
+
+test('why: a route folder with brackets in its name governs the files below it', async () => {
+  const root = makeRepo({
+    'src/app/[id]/page.tsx': '',
+    'intent-vault/modules/app/decisions/0001-ids.md': record({ id: 'app/0001', title: 'Ids are opaque', governs: ['src/app/[id]'] }),
+  });
+  try {
+    const r = await run(root, ['why', 'src/app/[id]/page.tsx', '--json']);
+    assert.deepEqual(JSON.parse(r.stdout).paths[0].records.map((x) => x.id), ['app/0001']);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('why: without proposals, the hint still says how to record intent', async () => {
+  const root = makeRepo({
+    'src/cart/cart.ts': '',
+    'intent-vault/decisions/0002-cart-cache.md': record({ id: 'root/0002', title: 'Carts live in a cache', status: 'deprecated', governs: ['src/cart/**'] }),
+  });
+  try {
+    const r = await run(root, ['why', 'src/cart/cart.ts']);
+    assert.match(r.stdout, /No active record governs src\/cart\/cart\.ts\.\nIf you make a load-bearing choice here/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('why and check: a misspelled vault folder is named on stderr instead of reading as no intent', async () => {
+  const root = makeRepo({
+    'src/payments/refund.js': '',
+    'intent-vault/decisions/0001-a.md': record({ id: 'root/0001', title: 'A', governs: ['src/payments/**'] }),
+  }, { config: { vault: 'intent-vualt' } });
+  try {
+    for (const argv of [['why', 'src/payments/refund.js'], ['check']]) {
+      const r = await run(root, argv);
+      assert.equal(r.code, 0);
+      assert.match(r.stderr, /^intent: vault folder intent-vualt \(from \.intent\.json\) does not exist; fix "vault" or run intent init$/m, argv[0]);
+    }
+    const t = await run(root, ['touch', 'src/payments/refund.js']);
+    assert.equal(t.stderr, '', 'touch stays silent');
+    assert.match((await run(root, ['why', 'src/payments/refund.js'])).stderr, /intent-vualt \(from \.intent\.json\) has no hub, decisions\/ or modules\/ yet/);
+  } finally {
+    cleanup(root);
   }
 });

@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { splitFrontmatter } from '../src/fm.mjs';
 import { BIN, SKILL_DIR, hookCommand, installSkill, mergeHooks } from '../src/commands/init.mjs';
@@ -199,7 +200,7 @@ test('init --hooks: merges into existing settings, keeps every key, adds no dupl
     assert.deepEqual(s.hooks.SessionStart, existing.hooks.SessionStart);
     assert.deepEqual(s.hooks.PreToolUse, [existing.hooks.PreToolUse[0], { matcher: MATCHER, hooks: [entry] }]);
     assert.deepEqual(s.hooks.PostToolUse, [{ matcher: MATCHER, hooks: [entry] }]);
-    assert.deepEqual(s.hooks.Stop, [{ hooks: [entry] }]);
+    assert.deepEqual(s.hooks.Stop, [{ hooks: [{ ...entry, timeout: 60 }] }]);
     assert.equal(hookCommand(), entry.command);
     assert.ok(existsSync(BIN), 'the hook command points at this repo\'s bin');
     assert.equal(read(root, '.gitignore'), 'node_modules/\n.claude/settings.local.json\n');
@@ -374,5 +375,127 @@ test('init: refuses a vault that is the repo root and writes nothing', async () 
     assert.equal(exists(root, '.intent.json'), false);
   } finally {
     cleanup(root);
+  }
+});
+
+test('init --help / -h: prints the usage, exits 0 and writes nothing', async () => {
+  const dir = tempDir();
+  try {
+    for (const flag of ['--help', '-h']) {
+      const r = await run(dir, ['init', '--hooks', flag]);
+      assert.equal(r.code, 0);
+      assert.match(r.stdout, /^usage: intent init /);
+      assert.deepEqual(readdirSync(dir), []);
+    }
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('init: an unknown flag is refused before anything is written', async () => {
+  const dir = tempDir();
+  try {
+    const r = await run(dir, ['init', '--hook']);
+    assert.equal(r.code, 2);
+    assert.match(r.stderr, /^intent init: unknown flag --hook \(did you mean --hooks\?\)/);
+    assert.deepEqual(readdirSync(dir), []);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('init --vault on a folder with its own index.json refuses and writes nothing', async () => {
+  const root = tempDir();
+  const vault = tempDir();
+  try {
+    writeTree(vault, { 'index.json': '{"my":"own index, not intent"}', 'Notes.md': '# Notes\n' });
+    const res = await run(root, ['init', '--vault', vault]);
+    assert.equal(res.code, 1);
+    assert.match(res.stderr, /index\.json exists and is not an intent index; move it away/);
+    assert.equal(readFileSync(join(vault, 'index.json'), 'utf8'), '{"my":"own index, not intent"}');
+    assert.deepEqual(readdirSync(root), []);
+    assert.deepEqual(readdirSync(vault).sort(), ['Notes.md', 'index.json']);
+  } finally {
+    cleanup(root);
+    cleanup(vault);
+  }
+});
+
+test('index: a foreign index.json in the vault is never overwritten', async () => {
+  const root = tempDir();
+  try {
+    writeTree(root, { '.intent.json': { version: 1, vault: 'v' }, 'v/index.json': '{"mine":1}' });
+    const r = await run(root, ['index']);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /is not an intent index/);
+    assert.equal(read(root, 'v/index.json'), '{"mine":1}');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('init: refuses a vault that contains the repo and writes nothing', async () => {
+  const parent = tempDir();
+  try {
+    writeTree(parent, { 'proj/src/a.js': '', 'proj/index.json': '{"mine":1}' });
+    const before = snapshot(parent);
+    const res = await run(join(parent, 'proj'), ['init', '--vault', '..']);
+    assert.equal(res.code, 1);
+    assert.match(res.stderr, /the vault cannot be the repo root or a folder that contains it/);
+    assert.deepEqual(snapshot(parent), before);
+    writeTree(parent, { 'proj/.intent.json': { version: 1, vault: '..' } });
+    await assert.rejects(run(join(parent, 'proj'), ['check']), /contains the repo/);
+  } finally {
+    cleanup(parent);
+  }
+});
+
+test('init --hooks in a git repo without .gitignore keeps the settings file out of git via info/exclude', async () => {
+  const root = tempDir();
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    const res = await run(root, ['init', '--hooks']);
+    assert.equal(res.code, 0, res.stderr);
+    assert.equal(exists(root, '.gitignore'), false);
+    execFileSync('git', ['check-ignore', '-q', '.claude/settings.local.json'], { cwd: root });
+    assert.match(res.stdout, /\.git\/info\/exclude {2}\(ignores \.claude\/settings\.local\.json\)/);
+    await run(root, ['init', '--hooks']);
+    const ex = read(root, '.git/info/exclude');
+    assert.equal(ex.split('\n').filter((l) => l === '.claude/settings.local.json').length, 1, 'added once');
+    const plain = tempDir();
+    try {
+      const r = await run(plain, ['init', '--hooks']);
+      assert.match(r.stdout, /not ignored by git: add \.claude\/settings\.local\.json to \.gitignore/);
+    } finally {
+      cleanup(plain);
+    }
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('init --hooks: the hook command survives $ and quotes in the install path; Stop gets a longer timeout', async () => {
+  const { cpSync } = await import('node:fs');
+  const { spawnSync } = await import('node:child_process');
+  const base = tempDir();
+  const dir = tempDir();
+  try {
+    const pkg = join(base, "tools$HOME it's");
+    cpSync(join(dirname(BIN), '..', 'bin'), join(pkg, 'bin'), { recursive: true });
+    cpSync(join(dirname(BIN), '..', 'src'), join(pkg, 'src'), { recursive: true });
+    const cmd = hookCommand(join(pkg, 'bin/intent.mjs'), 'linux');
+    assert.equal(cmd, `node '${join(pkg, 'bin/intent.mjs').replace(/'/g, "'\\''")}' hook`);
+    const r = spawnSync('sh', ['-c', cmd], { cwd: dir, input: '{}', encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout + r.stderr, '');
+    assert.equal(hookCommand('/plain/bin/intent.mjs', 'linux'), 'node "/plain/bin/intent.mjs" hook', 'plain paths keep the old form');
+    const res = await run(dir, ['init', '--hooks']);
+    assert.equal(res.code, 0, res.stderr);
+    const s = JSON.parse(read(dir, '.claude/settings.local.json'));
+    assert.equal(s.hooks.Stop[0].hooks[0].timeout, 60);
+    assert.equal(s.hooks.PreToolUse[0].hooks[0].timeout, 10);
+  } finally {
+    cleanup(base);
+    cleanup(dir);
   }
 });

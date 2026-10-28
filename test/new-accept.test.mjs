@@ -270,7 +270,7 @@ test('accept: flips only the status line; every other byte stays', async () => {
     assert.equal(r.stdout, `Accepted billing/0002: ${rel}`);
     assert.equal(r.stderr, '');
     const after = read(root, rel);
-    assert.equal(after, text.replace('status:   proposed   # waiting on finance', 'status:   accepted'));
+    assert.equal(after, text.replace('status:   proposed   # waiting on finance', 'status:   accepted   # waiting on finance'), 'the inline comment stays');
     const a = after.split('\n');
     const b = text.split('\n');
     assert.equal(a.length, b.length);
@@ -414,7 +414,96 @@ test('accept: a capitalised "Status:" frontmatter key is read and flipped in pla
   try {
     const r = await run(root, ['accept', 'root/0004']);
     assert.equal(r.code, 0, r.stderr);
-    assert.equal(read(root, `${V}/decisions/0004-one-box.md`), text.replace('Status: Proposed # waiting', 'Status: accepted'));
+    assert.equal(read(root, `${V}/decisions/0004-one-box.md`), text.replace('Status: Proposed # waiting', 'Status: accepted # waiting'));
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('new: a misspelled flag or a stray argument after a flag writes nothing', async () => {
+  const root = shop({ [`${V}/modules/payments/decisions/0002-old.md`]: record({ id: 'payments/0002', title: 'Old' }) });
+  try {
+    const before = snapshot(root);
+    const typo = await run(root, ['new', 'payments', 'Refunds are capped at the order total', '--governs', 'src/payments', '--supersede', 'payments/0002']);
+    assert.equal(typo.code, 2);
+    assert.match(typo.stderr, /unknown flag --supersede \(did you mean --supersedes\?\)/);
+    const spaced = await run(root, ['new', 'payments', 'Refunds go to the original card', '--governs', 'src/payments', 'src/ship', '--why', 'chargebacks']);
+    assert.equal(spaced.code, 2);
+    assert.match(spaced.stderr, /unexpected argument "src\/ship" after a flag/);
+    const twice = await run(root, ['new', 'payments', 'T', '--why', 'a', '--why', 'b']);
+    assert.equal(twice.code, 2);
+    assert.match(twice.stderr, /--why given more than once/);
+    const help = await run(root, ['new', '--help']);
+    assert.equal(help.code, 0);
+    assert.match(help.stdout, /--provenance/);
+    assert.deepEqual(snapshot(root), before);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('new: repeated --governs adds up; a --why value may start with --', async () => {
+  const root = shop();
+  try {
+    const r = await run(root, ['new', 'billing', 'No skipping hooks', '--governs', 'src/billing', '--governs', 'src/payments', '--why', '--no-verify hid a broken build last spring', '--json']);
+    assert.equal(r.code, 0, r.stderr);
+    const text = read(root, JSON.parse(r.stdout).path);
+    assert.match(text, /^governs: \[src\/billing, src\/payments\]$/m);
+    assert.match(text, /## Why — the intent\n\n--no-verify hid a broken build last spring\n/);
+    const flagsFirst = await run(root, ['new', '--json', 'billing', 'Flags may come first']);
+    assert.equal(flagsFirst.code, 0, flagsFirst.stderr);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('accept: a status with a qualifier (rejected, abandoned, pending removal) is never flipped', async () => {
+  const st = (status) => `---\nid: root/0000\ntitle: T\nstatus: ${status}\n---\n# T\n\n## Why — the intent\n\nA reason.\n`;
+  const statuses = ['Proposal rejected', 'Draft (abandoned)', 'proposed — rejected by legal 2026-09', 'Pending removal', 'Review: rejected'];
+  const files = Object.fromEntries(statuses.map((s, i) => [`${V}/decisions/000${i + 1}-x.md`, st(s).replace('root/0000', `root/000${i + 1}`)]));
+  files[`${V}/decisions/0009-ok.md`] = st('Draft').replace('root/0000', 'root/0009');
+  const root = shop(files);
+  try {
+    const r = await run(root, ['accept', 'root/0001', 'root/0002', 'root/0003', 'root/0004', 'root/0005']);
+    assert.equal(r.code, 1);
+    assert.equal(r.stdout, '');
+    for (const [i, s] of statuses.entries()) assert.equal(read(root, `${V}/decisions/000${i + 1}-x.md`), files[`${V}/decisions/000${i + 1}-x.md`], s);
+    assert.match(r.stderr, /root\/0004: status is "Pending removal", not plain proposed; edit it by hand if it should be accepted/);
+    const ok = await run(root, ['accept', 'root/0009']);
+    assert.equal(ok.code, 0, ok.stderr);
+    assert.match(read(root, `${V}/decisions/0009-ok.md`), /^status: accepted$/m);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('new: a module name in another case joins the existing module; ids stay in one namespace', async () => {
+  const root = shop({
+    [`${V}/modules/Billing/Billing.md`]: moduleNote('Billing', ['src/billing/**']),
+    [`${V}/modules/Billing/decisions/0001-first.md`]: record({ id: 'Billing/0001', title: 'First' }),
+  });
+  try {
+    const r = await run(root, ['new', 'billing', 'Second', '--supersedes', 'billing/0001', '--json']);
+    assert.equal(r.code, 0, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout), { id: 'Billing/0002', path: `${V}/modules/Billing/decisions/0002-second.md` });
+    assert.match(read(root, `${V}/modules/Billing/decisions/0002-second.md`), /^supersedes: \[Billing\/0001\]$/m);
+    assert.deepEqual(rec(root, 'Billing/0001').pendingReplacements, ['Billing/0002']);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('new: --governs may not climb out of the repo through ..', async () => {
+  const root = shop();
+  try {
+    const before = snapshot(root);
+    const r = await run(root, ['new', 'billing', 'X', '--governs', 'src/../../outside/**']);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /--governs src\/\.\.\/\.\.\/outside\/\*\* is not a path inside the repo/);
+    assert.deepEqual(snapshot(root), before);
+    const ok = await run(root, ['new', 'billing', 'Y', '--governs', './src/./billing/../payments', '--json']);
+    assert.equal(ok.code, 0, ok.stderr);
+    assert.match(read(root, JSON.parse(ok.stdout).path), /^governs: \[src\/payments\]$/m);
   } finally {
     cleanup(root);
   }

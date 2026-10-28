@@ -1,6 +1,6 @@
 // Opt-in and configuration. A repo opts in with .intent.json at its root.
 
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 export const CONFIG_FILE = '.intent.json';
@@ -29,9 +29,34 @@ export function findRoot(start = process.cwd()) {
   }
 }
 
+const strings = (v, fallback) => {
+  if (typeof v === 'string') return v.trim() ? [v.trim()] : [];
+  if (Array.isArray(v)) return v.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim());
+  return [...fallback];
+};
+const number = (v, fallback) => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() && Number.isFinite(Number(v)) ? Number(v) : fallback);
+
+// Missing or wrong-typed keys take the defaults: a hand-edited config never crashes a command.
 export function readConfig(root) {
-  const raw = JSON.parse(readFileSync(join(root, CONFIG_FILE), 'utf8'));
-  return { ...DEFAULTS, ...raw };
+  const file = join(root, CONFIG_FILE);
+  let raw;
+  try { raw = JSON.parse(readFileSync(file, 'utf8')); } catch (e) {
+    const err = new Error(`cannot read ${file}: ${e.message}; fix the JSON`);
+    err.exitCode = 1;
+    throw err;
+  }
+  const c = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  return {
+    ...DEFAULTS,
+    ...c,
+    vault: typeof c.vault === 'string' && c.vault.trim() ? c.vault : DEFAULTS.vault,
+    codeRoots: strings(c.codeRoots, DEFAULTS.codeRoots),
+    ignore: strings(c.ignore, DEFAULTS.ignore),
+    rulesFiles: strings(c.rulesFiles, DEFAULTS.rulesFiles),
+    areaDepth: number(c.areaDepth, DEFAULTS.areaDepth),
+    reviewMonths: number(c.reviewMonths, DEFAULTS.reviewMonths),
+    proposedMaxDays: number(c.proposedMaxDays, DEFAULTS.proposedMaxDays),
+  };
 }
 
 export function toPosix(p) {
@@ -72,12 +97,23 @@ function relToRoot(root, abs) {
   }
 }
 
+// True when dir is a folder above root: its notes would be read from the repo's own code.
+export function containsRepo(dir, root) {
+  const r = relative(realPathOf(dir), realPathOf(root));
+  return r !== '' && !outside(toPosix(r));
+}
+
 // The context every command works from, or null when the folder has not opted in.
 export function loadContext(cwd = process.cwd()) {
   const root = findRoot(cwd);
   if (!root) return null;
   const config = readConfig(root);
   const vaultDir = isAbsolute(config.vault) ? config.vault : resolve(root, config.vault);
+  if (containsRepo(vaultDir, root)) {
+    const e = new Error(`the vault "${config.vault}" in ${join(root, CONFIG_FILE)} contains the repo; point "vault" at a folder such as intent-vault`);
+    e.exitCode = 1;
+    throw e;
+  }
   const vaultRel = toPosix(relative(root, vaultDir)) || '.';
   return {
     root,
@@ -91,4 +127,15 @@ export function loadContext(cwd = process.cwd()) {
       return relToRoot(root, resolve(base, p));
     },
   };
+}
+
+// One stderr line when the configured vault folder is missing, or holds nothing of a vault yet:
+// a typo in "vault" would otherwise read as "no recorded intent". null when all is well.
+export function vaultWarning(ctx) {
+  const shown = ctx.vaultInRepo ? ctx.vaultRel : ctx.vaultDir;
+  if (!existsSync(ctx.vaultDir)) return `intent: vault folder ${shown} (from ${CONFIG_FILE}) does not exist; fix "vault" or run intent init`;
+  let names = [];
+  try { names = readdirSync(ctx.vaultDir).map((n) => n.toLowerCase()); } catch { /* unreadable: say nothing */ return null; }
+  if (['intent-vault.md', 'decisions', 'modules'].some((n) => names.includes(n))) return null;
+  return `intent: vault folder ${shown} (from ${CONFIG_FILE}) has no hub, decisions/ or modules/ yet; fix "vault" or run intent init`;
 }

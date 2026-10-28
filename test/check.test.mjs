@@ -8,7 +8,7 @@ import { loadIndex } from '../src/index.mjs';
 import { lastChangeMap } from '../src/git.mjs';
 import { applyRules } from '../src/rules.mjs';
 import { TODO_WHY } from '../src/vault.mjs';
-import { makeRepo, run, read, exists, cleanup, record, moduleNote, commitAll, tempDir, writeTree, NOW } from './helpers.mjs';
+import { makeRepo, run, read, exists, cleanup, record, moduleNote, commitAll, gitRun, tempDir, writeTree, NOW } from './helpers.mjs';
 
 const V = 'intent-vault';
 
@@ -131,7 +131,9 @@ test('check: known fixture scores every penalty kind exactly', async () => {
     assert.ok(lines.includes('  Uncovered code areas: 2 of 4 (-20)'));
     assert.ok(lines.includes('  Drift (governed files changed after the record date): 1 (-3)'));
     assert.ok(lines.includes('  Unreachable records (nothing points an agent at them): 1 (-0.5)'));
-    assert.ok(lines.includes('  billing/0001 (2026-09-01): 1 changed since, latest src/billing/refunds/r.ts on 2026-10-05'));
+    assert.ok(lines.includes('  billing/0001 (2026-09-01): 1 changed since, latest src/billing/refunds/r.ts on 2026-10-05 (intent-vault/modules/billing/decisions/0001-refunds.md)'), lines.join('\n'));
+    assert.ok(lines.includes('  billing/0001: review was due 2026-10-01 (intent-vault/modules/billing/decisions/0001-refunds.md)'));
+    assert.ok(lines.some((l) => /^ {2}root\/0003: proposed \d+ days ago \(2026-09-01\) \(intent-vault\/decisions\/0003-cache\.md\)$/.test(l)));
     assert.ok(lines.includes('  AGENTS.md: file missing'));
     assert.ok(!human.stdout.includes('Drift not checked'));
     assert.equal(lines.at(-1), 'Biggest gap: 2 uncovered areas. src/search has a proposal waiting: ask the human to confirm it, then: intent accept root/0003');
@@ -559,6 +561,97 @@ test('check: an uncovered area with a waiting proposal points at intent accept, 
     assert.match(out, /^ {2}src\/shipping \(1 file; waiting for intent accept: root\/0001\)$/m);
     assert.match(out, /^ {2}src\/catalog \(1 file\)$/m);
     assert.equal(out.split('\n').at(-1), 'Biggest gap: 2 uncovered areas. src/shipping has a proposal waiting: ask the human to confirm it, then: intent accept root/0001');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('lastChangeMap: real paths for non-ASCII names, and commit days in UTC like record dates', () => {
+  const root = makeRepo({ 'src/café/a.js': 'a', 'src/plain/b.js': 'b' }, { git: true });
+  try {
+    commitAll(root, 'init', '2026-10-01');
+    writeTree(root, { 'src/café/a.js': 'a2' });
+    gitRun(root, ['add', '-A']);
+    // 08:00 in Tokyo is still 2026-10-28 in UTC, the day intent new would write.
+    const d = '2026-10-29T08:00:00+09:00';
+    gitRun(root, ['commit', '-q', '-m', 'tokyo morning'], { GIT_AUTHOR_DATE: d, GIT_COMMITTER_DATE: d });
+    const map = lastChangeMap(root);
+    assert.equal(map.get('src/café/a.js'), '2026-10-28');
+    assert.equal(map.get('src/plain/b.js'), '2026-10-01');
+    assert.equal([...map.keys()].some((k) => k.includes('\\')), false);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('check: a misspelled flag is an error, not a silent pass', async () => {
+  const root = makeRepo({ 'src/a/x.ts': '' });
+  try {
+    const r = await run(root, ['check', '--mn', '99']);
+    assert.equal(r.code, 2);
+    assert.match(r.stderr, /unknown flag --mn \(did you mean --min\?\)/);
+    assert.equal(r.stdout, '');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('README demo: the walkthrough gives the scores the README states, whatever today is', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const base = tempDir();
+  try {
+    const dest = join(base, 'demo');
+    execFileSync('node', [fileURLToPath(new URL('../examples/make-demo.mjs', import.meta.url)), dest], { encoding: 'utf8' });
+    for (const now of ['2026-10-28T12:00:00Z', '2026-12-01T12:00:00Z', '2027-06-01T12:00:00Z']) {
+      const r = await run(dest, ['check', '--json'], { env: { INTENT_NOW: now } });
+      assert.equal(JSON.parse(r.stdout).score, 77, now);
+    }
+    const env = { INTENT_NOW: '2027-06-01T12:00:00Z' };
+    await run(dest, ['rules'], { env });
+    const cap = await run(dest, ['capture', '--json'], { env });
+    const rel = JSON.parse(cap.stdout).proposals[0].path;
+    assert.equal(rel, 'intent-vault/decisions/0002-captured-src-notifications.md');
+    const text = read(dest, rel)
+      .replace(/TODO: name the decision behind the change in src\/notifications/g, 'Pickup reminders go by email')
+      .replace(/TODO — state the rule this change follows, in the present tense\./, 'Pickup reminders go by email, 30 minutes ahead.')
+      .replace(TODO_WHY, 'The owner said customers miss pickups without a reminder.');
+    writeFileSync(join(dest, rel), text);
+    const acc = await run(dest, ['accept', 'root/0002'], { env });
+    assert.equal(acc.stderr, '');
+    assert.equal(JSON.parse((await run(dest, ['check', '--json'], { env })).stdout).score, 92);
+  } finally {
+    cleanup(base);
+  }
+});
+
+test('check: a repo with any penalty never shows 100', async () => {
+  const root = makeRepo({
+    'src/a/x.ts': '',
+    [`${V}/decisions/0001-a.md`]: record({ id: '0001', title: 'A', governs: ['src/a/**'] }),
+    [`${V}/decisions/0002-b.md`]: record({ id: '0002', title: 'B' }),
+  }, { config: { rulesFiles: [] } });
+  try {
+    const { report } = await checkJson(root);
+    assert.equal(penalty(report, 'unreachable').penalty, 0.5);
+    assert.equal(report.score, 99);
+    assert.equal((await run(root, ['check', '--min', '100'])).code, 1);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('check: the drift hint names the record file to re-read', async () => {
+  const root = makeRepo({
+    'src/a/x.ts': 'v1',
+    [`${V}/decisions/0001-a.md`]: record({ id: '0001', title: 'A', governs: ['src/a/**'], date: '2026-09-01' }),
+  }, { git: true, config: { rulesFiles: [] } });
+  try {
+    commitAll(root, 'one', '2026-09-01');
+    writeTree(root, { 'src/a/x.ts': 'v2' });
+    commitAll(root, 'two', '2026-10-01');
+    const out = (await run(root, ['check'])).stdout.split('\n');
+    assert.match(out.at(-1), /^Biggest gap: 1 drifted record\. Re-read root\/0001 \(intent-vault\/decisions\/0001-a\.md\) against its changed files/);
   } finally {
     cleanup(root);
   }

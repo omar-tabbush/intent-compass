@@ -1,6 +1,6 @@
 // intent capture: draft proposed records for changed code that no decision governs.
 
-import { loadContext } from '../config.mjs';
+import { loadContext, vaultWarning } from '../config.mjs';
 import { areaLabel, capture } from '../capture.mjs';
 import { notOptedIn } from './_shared.mjs';
 
@@ -9,6 +9,8 @@ const MAX_FILES_SHOWN = 5;
 export async function run({ flags }, io) {
   const ctx = loadContext(io.cwd);
   if (!ctx) return notOptedIn(io);
+  const warning = vaultWarning(ctx);
+  if (warning) io.err(warning);
   if (flags.since === true || flags.since === '') { io.err('intent capture: --since needs a git ref'); return 1; }
   let res;
   try {
@@ -28,7 +30,7 @@ function fileList(files) {
 }
 
 function report(res) {
-  if (!res.changed.length) return ['Nothing to capture.'];
+  if (!res.changed.length && !res.skipped.length) return ['Nothing to capture.'];
   const out = [];
   if (res.proposals.length) {
     out.push(`${res.dryRun ? 'Would propose' : 'Proposed'} ${res.proposals.length} record(s) for changed code with no recorded intent (Why left as TODO):`);
@@ -40,7 +42,7 @@ function report(res) {
   }
   if (res.skipped.length) {
     out.push('Skipped:');
-    for (const s of res.skipped) out.push(`  ${areaLabel(s.area)}: ${s.reason}`);
+    for (const s of res.skipped) out.push(`  ${s.path ? JSON.stringify(s.path) : areaLabel(s.area)}: ${s.reason}`);
   }
   if (res.dryRun) out.push('Dry run: nothing written.');
   else if (res.proposals.length) out.push('Fill each Why only from what the user said; then ask the user to run: intent accept <id>');
