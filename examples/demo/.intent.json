@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "vault": "intent-vault",
+  "codeRoots": ["src"],
+  "areaDepth": 1,
+  "reviewMonths": 6,
+  "proposedMaxDays": 14,
+  "rulesFiles": ["AGENTS.md", "CLAUDE.md"]
+}
