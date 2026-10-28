@@ -1,7 +1,7 @@
 ---
 id: root/0001
 title: "Intent Compass ships as an agent skill plus a CLI, not a marketplace plugin"
-status: proposed
+status: accepted
 date: 2026-10-28
 governs: ["skill/**", "bin/**", src/commands/init.mjs]
 provenance: human

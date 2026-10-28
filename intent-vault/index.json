@@ -8,8 +8,8 @@
       "path": "decisions/0001-intent-compass-ships-as-an-agent-skill-plus-a-cli-not-a-mark.md",
       "module": "root",
       "title": "Intent Compass ships as an agent skill plus a CLI, not a marketplace plugin",
-      "status": "proposed",
-      "statusRaw": "proposed",
+      "status": "accepted",
+      "statusRaw": "accepted",
       "date": "2026-10-28",
       "reviewDate": "2027-04-28",
       "provenance": "human",
@@ -26,7 +26,7 @@
       "supersedes": [],
       "supersededBy": [],
       "pendingReplacements": [],
-      "effectiveStatus": "proposed"
+      "effectiveStatus": "accepted"
     },
     {
       "id": "root/0002",
@@ -35,8 +35,8 @@
       "path": "decisions/0002-capture-runs-on-every-edit-and-at-the-end-of-each-session.md",
       "module": "root",
       "title": "Capture runs on every edit and at the end of each session",
-      "status": "proposed",
-      "statusRaw": "proposed",
+      "status": "accepted",
+      "statusRaw": "accepted",
       "date": "2026-10-28",
       "reviewDate": "2027-04-28",
       "provenance": "human",
@@ -54,7 +54,7 @@
       "supersedes": [],
       "supersededBy": [],
       "pendingReplacements": [],
-      "effectiveStatus": "proposed"
+      "effectiveStatus": "accepted"
     },
     {
       "id": "root/0003",
@@ -63,8 +63,8 @@
       "path": "decisions/0003-the-vault-lives-in-the-repo-by-default-and-the-user-can-poin.md",
       "module": "root",
       "title": "The vault lives in the repo by default and the user can point it at another folder",
-      "status": "proposed",
-      "statusRaw": "proposed",
+      "status": "accepted",
+      "statusRaw": "accepted",
       "date": "2026-10-28",
       "reviewDate": "2027-04-28",
       "provenance": "human",
@@ -80,7 +80,7 @@
       "supersedes": [],
       "supersededBy": [],
       "pendingReplacements": [],
-      "effectiveStatus": "proposed"
+      "effectiveStatus": "accepted"
     },
     {
       "id": "root/0004",
@@ -89,8 +89,8 @@
       "path": "decisions/0004-records-start-as-proposed-until-the-user-confirms-them.md",
       "module": "root",
       "title": "Records start as proposed until the user confirms them",
-      "status": "proposed",
-      "statusRaw": "proposed",
+      "status": "accepted",
+      "statusRaw": "accepted",
       "date": "2026-10-28",
       "reviewDate": "2027-04-28",
       "provenance": "human",
@@ -107,7 +107,7 @@
       "supersedes": [],
       "supersededBy": [],
       "pendingReplacements": [],
-      "effectiveStatus": "proposed"
+      "effectiveStatus": "accepted"
     },
     {
       "id": "root/0005",
@@ -116,8 +116,8 @@
       "path": "decisions/0005-records-are-append-only-a-reversal-is-a-new-record-that-supe.md",
       "module": "root",
       "title": "Records are append-only: a reversal is a new record that supersedes the old one",
-      "status": "proposed",
-      "statusRaw": "proposed",
+      "status": "accepted",
+      "statusRaw": "accepted",
       "date": "2026-10-28",
       "reviewDate": "2027-04-28",
       "provenance": "human",
@@ -135,7 +135,7 @@
       "supersedes": [],
       "supersededBy": [],
       "pendingReplacements": [],
-      "effectiveStatus": "proposed"
+      "effectiveStatus": "accepted"
     },
     {
       "id": "root/0006",
@@ -144,8 +144,8 @@
       "path": "decisions/0006-the-tool-never-invents-a-rationale.md",
       "module": "root",
       "title": "The tool never invents a rationale",
-      "status": "proposed",
-      "statusRaw": "proposed",
+      "status": "accepted",
+      "statusRaw": "accepted",
       "date": "2026-10-28",
       "reviewDate": "2027-04-28",
       "provenance": "human",
@@ -162,7 +162,7 @@
       "supersedes": [],
       "supersededBy": [],
       "pendingReplacements": [],
-      "effectiveStatus": "proposed"
+      "effectiveStatus": "accepted"
     },
     {
       "id": "root/0007",
@@ -171,8 +171,8 @@
       "path": "decisions/0007-the-tool-is-silent-in-folders-that-have-not-opted-in.md",
       "module": "root",
       "title": "The tool is silent in folders that have not opted in",
-      "status": "proposed",
-      "statusRaw": "proposed",
+      "status": "accepted",
+      "statusRaw": "accepted",
       "date": "2026-10-28",
       "reviewDate": "2027-04-28",
       "provenance": "human",
@@ -188,7 +188,7 @@
       "supersedes": [],
       "supersededBy": [],
       "pendingReplacements": [],
-      "effectiveStatus": "proposed"
+      "effectiveStatus": "accepted"
     },
     {
       "id": "root/0008",
@@ -197,8 +197,8 @@
       "path": "decisions/0008-import-never-modifies-the-source-vault.md",
       "module": "root",
       "title": "Import never modifies the source vault",
-      "status": "proposed",
-      "statusRaw": "proposed",
+      "status": "accepted",
+      "statusRaw": "accepted",
       "date": "2026-10-28",
       "reviewDate": "2027-04-28",
       "provenance": "human",
@@ -214,7 +214,7 @@
       "supersedes": [],
       "supersededBy": [],
       "pendingReplacements": [],
-      "effectiveStatus": "proposed"
+      "effectiveStatus": "accepted"
     },
     {
       "id": "root/0009",
@@ -223,8 +223,8 @@
       "path": "decisions/0009-the-cli-has-zero-dependencies-and-runs-on-plain-node.md",
       "module": "root",
       "title": "The CLI has zero dependencies and runs on plain Node",
-      "status": "proposed",
-      "statusRaw": "proposed",
+      "status": "accepted",
+      "statusRaw": "accepted",
       "date": "2026-10-28",
       "reviewDate": "2027-04-28",
       "provenance": "human",
@@ -240,7 +240,7 @@
       "supersedes": [],
       "supersededBy": [],
       "pendingReplacements": [],
-      "effectiveStatus": "proposed"
+      "effectiveStatus": "accepted"
     },
     {
       "id": "root/0010",
@@ -249,8 +249,8 @@
       "path": "decisions/0010-client-material-never-enters-this-repo.md",
       "module": "root",
       "title": "Client material never enters this repo",
-      "status": "proposed",
-      "statusRaw": "proposed",
+      "status": "accepted",
+      "statusRaw": "accepted",
       "date": "2026-10-28",
       "reviewDate": "2027-04-28",
       "provenance": "human",
@@ -266,7 +266,7 @@
       "supersedes": [],
       "supersededBy": [],
       "pendingReplacements": [],
-      "effectiveStatus": "proposed"
+      "effectiveStatus": "accepted"
     },
     {
       "id": "root/0011",
@@ -275,8 +275,8 @@
       "path": "decisions/0011-start-fresh-and-port-small-parts-of-the-earlier-compass-plug.md",
       "module": "root",
       "title": "Start fresh and port small parts of the earlier Compass plugin",
-      "status": "proposed",
-      "statusRaw": "proposed",
+      "status": "accepted",
+      "statusRaw": "accepted",
       "date": "2026-10-28",
       "reviewDate": "2027-04-28",
       "provenance": "ai-suggested",
@@ -293,7 +293,7 @@
       "supersedes": [],
       "supersededBy": [],
       "pendingReplacements": [],
-      "effectiveStatus": "proposed"
+      "effectiveStatus": "accepted"
     },
     {
       "id": "root/0012",
@@ -302,8 +302,8 @@
       "path": "decisions/0012-ids-are-allocated-by-the-cli-and-numbered-per-module.md",
       "module": "root",
       "title": "IDs are allocated by the CLI and numbered per module",
-      "status": "proposed",
-      "statusRaw": "proposed",
+      "status": "accepted",
+      "statusRaw": "accepted",
       "date": "2026-10-28",
       "reviewDate": "2027-04-28",
       "provenance": "ai-suggested",
@@ -320,7 +320,7 @@
       "supersedes": [],
       "supersededBy": [],
       "pendingReplacements": [],
-      "effectiveStatus": "proposed"
+      "effectiveStatus": "accepted"
     },
     {
       "id": "root/0013",
@@ -329,8 +329,8 @@
       "path": "decisions/0013-the-claude-code-hook-never-approves-or-denies-a-tool-call.md",
       "module": "root",
       "title": "The Claude Code hook never approves or denies a tool call",
-      "status": "proposed",
-      "statusRaw": "proposed",
+      "status": "accepted",
+      "statusRaw": "accepted",
       "date": "2026-10-28",
       "reviewDate": "2027-04-28",
       "provenance": "ai-suggested",
@@ -345,7 +345,7 @@
       "supersedes": [],
       "supersededBy": [],
       "pendingReplacements": [],
-      "effectiveStatus": "proposed"
+      "effectiveStatus": "accepted"
     }
   ],
   "modules": [],

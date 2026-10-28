@@ -1,7 +1,7 @@
 ---
 id: root/0007
 title: The tool is silent in folders that have not opted in
-status: proposed
+status: accepted
 date: 2026-10-28
 governs: [src/config.mjs, src/commands/hook.mjs]
 provenance: human

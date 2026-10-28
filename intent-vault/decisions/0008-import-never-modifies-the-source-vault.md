@@ -1,7 +1,7 @@
 ---
 id: root/0008
 title: Import never modifies the source vault
-status: proposed
+status: accepted
 date: 2026-10-28
 governs: [src/importer.mjs, src/commands/import.mjs]
 provenance: human

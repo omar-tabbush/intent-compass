@@ -1,7 +1,7 @@
 ---
 id: root/0009
 title: The CLI has zero dependencies and runs on plain Node
-status: proposed
+status: accepted
 date: 2026-10-28
 governs: ["src/**", "bin/**"]
 provenance: human

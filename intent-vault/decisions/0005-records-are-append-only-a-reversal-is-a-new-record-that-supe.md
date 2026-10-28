@@ -1,7 +1,7 @@
 ---
 id: root/0005
 title: "Records are append-only: a reversal is a new record that supersedes the old one"
-status: proposed
+status: accepted
 date: 2026-10-28
 governs: [src/index.mjs, src/commands/new.mjs, src/commands/accept.mjs, src/importer.mjs]
 provenance: human

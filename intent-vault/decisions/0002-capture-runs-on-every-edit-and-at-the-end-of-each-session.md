@@ -1,7 +1,7 @@
 ---
 id: root/0002
 title: Capture runs on every edit and at the end of each session
-status: proposed
+status: accepted
 date: 2026-10-28
 governs: [src/commands/hook.mjs, src/commands/touch.mjs, src/capture.mjs, src/session.mjs]
 provenance: human
@@ -13,7 +13,7 @@ tags: []
 
 ## Context
 
-Asked whether capture should run at session end, after every edit, or both, Omar chose "Both" (2026-10-27). He gave no further reason.
+Asked whether capture should run at session end, after every edit, or both, Omar chose "Both" (2026-10-27). No further reason was given.
 
 ## Decision
 

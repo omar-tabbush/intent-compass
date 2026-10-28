@@ -1,7 +1,7 @@
 ---
 id: root/0013
 title: The Claude Code hook never approves or denies a tool call
-status: proposed
+status: accepted
 date: 2026-10-28
 governs: [src/commands/hook.mjs]
 provenance: ai-suggested

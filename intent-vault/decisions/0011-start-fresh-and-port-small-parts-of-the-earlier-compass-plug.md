@@ -1,7 +1,7 @@
 ---
 id: root/0011
 title: Start fresh and port small parts of the earlier Compass plugin
-status: proposed
+status: accepted
 date: 2026-10-28
 governs: [src/fm.mjs, src/commands/hook.mjs, src/importer.mjs]
 provenance: ai-suggested

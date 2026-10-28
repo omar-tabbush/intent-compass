@@ -1,7 +1,7 @@
 ---
 id: root/0012
 title: IDs are allocated by the CLI and numbered per module
-status: proposed
+status: accepted
 date: 2026-10-28
 governs: [src/ids.mjs, src/commands/new.mjs, src/capture.mjs]
 provenance: ai-suggested

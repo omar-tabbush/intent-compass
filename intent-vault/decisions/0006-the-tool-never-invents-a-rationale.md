@@ -1,7 +1,7 @@
 ---
 id: root/0006
 title: The tool never invents a rationale
-status: proposed
+status: accepted
 date: 2026-10-28
 governs: [src/capture.mjs, src/record.mjs, "skill/**"]
 provenance: human

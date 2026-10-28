@@ -1,7 +1,7 @@
 ---
 id: root/0003
 title: The vault lives in the repo by default and the user can point it at another folder
-status: proposed
+status: accepted
 date: 2026-10-28
 governs: [src/config.mjs, src/commands/init.mjs]
 provenance: human

@@ -1,7 +1,7 @@
 ---
 id: root/0010
 title: Client material never enters this repo
-status: proposed
+status: accepted
 date: 2026-10-28
 governs: ["examples/**", "test/fixtures/**"]
 provenance: human

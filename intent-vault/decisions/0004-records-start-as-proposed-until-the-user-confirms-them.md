@@ -1,7 +1,7 @@
 ---
 id: root/0004
 title: Records start as proposed until the user confirms them
-status: proposed
+status: accepted
 date: 2026-10-28
 governs: [src/capture.mjs, src/commands/new.mjs, src/commands/accept.mjs]
 provenance: human
