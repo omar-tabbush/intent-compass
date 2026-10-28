@@ -37,7 +37,7 @@ export function hubContent(index) {
   const out = [];
   const count = (s) => index.records.filter((r) => r.effectiveStatus === s).length;
   out.push('## Status', '');
-  out.push(`${index.records.length} records: ${count('accepted')} accepted, ${count('proposed')} proposed, ${count('superseded')} superseded, ${count('deprecated')} deprecated, ${count('unknown')} unknown.`);
+  out.push(`${index.records.length} record${index.records.length === 1 ? '' : 's'}: ${count('accepted')} accepted, ${count('proposed')} proposed, ${count('superseded')} superseded, ${count('deprecated')} deprecated, ${count('unknown')} unknown.`);
   out.push('', '## Modules', '');
   if (!index.modules.length) out.push('_None yet._');
   for (const m of index.modules) {

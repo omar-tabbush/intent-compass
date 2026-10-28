@@ -116,7 +116,10 @@ Free text: constraints, open questions.
 | `record.mjs` | `renderRecord(meta, sectionsObj) → markdown`; `SECTION_ORDER` |
 | `generated.mjs` | `replaceRegion(text, name, content) → text \| null`; `region(name, content)`; `syncGenerated(ctx, index)` (rewrites the hub and module regions; returns changed files) |
 | `git.mjs` | `isGitRepo(root)`; `changedFiles(root)` (unstaged + staged + untracked, repo-relative); `lastChangeMap(root) → Map(file → ISO date)`; `git(root, args)` |
-| `io.mjs` | `makeIO({cwd, env, stdout, stderr}) → io`; `parseArgs(argv) → {positional, flags}` |
+| `io.mjs` | `makeIO({cwd, env, stdout, stderr}) → io`; `parseArgs(argv) → {positional, flags}`; `list(flag)` (comma list); `captureIO()` (tests) |
+| `rules.mjs` | `rulesBody(ctx)`; `rulesBlock(ctx)`; `blockState(ctx, text)`; `rulesStatus(ctx) → [{file, state: ok\|outdated\|missing\|no-file}]`; `applyRules(ctx, {create}) → [{file, action}]` |
+| `session.mjs` | `ensureCache(ctx)`; `readSession(ctx)`; `touch(ctx, paths, now)`; `clearSession(ctx)`; `readHookState(ctx, sessionId)`; `writeHookState(ctx, sessionId, state)` |
+| `commands/_shared.mjs` | `notOptedIn(io)` (stderr line, returns 1); `refresh(ctx) → index` (rebuild and write `index.json` and the generated regions) |
 
 `index` shape:
 

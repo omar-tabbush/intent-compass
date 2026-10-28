@@ -7,6 +7,7 @@ import { loadVault } from './vault.mjs';
 import { matchPath, isUnder, normalizePath, globBase, hasGlob } from './glob.mjs';
 import { listFiles } from './walk.mjs';
 import { unwiki } from './fm.mjs';
+import { syncGenerated } from './generated.mjs';
 
 export const ACTIVE = new Set(['accepted', 'unknown']);
 const RANK = { accepted: 0, unknown: 1, proposed: 2, superseded: 3, deprecated: 4 };
@@ -27,7 +28,7 @@ export function buildIndex(vault) {
   }
   for (const [id, rs] of byId) {
     if (rs.length > 1) {
-      problems.push({ kind: 'duplicate-id', path: rs.map((r) => r.path).join(', '), message: `ID ${id} is used by ${rs.length} records` });
+      problems.push({ kind: 'duplicate-id', path: rs.map((r) => r.path).join(', '), paths: rs.map((r) => r.path), message: `ID ${id} is used by ${rs.length} records` });
     }
   }
 
@@ -123,6 +124,14 @@ export function writeIndex(ctx, index) {
   const file = join(ctx.vaultDir, 'index.json');
   writeFileSync(file, JSON.stringify(index, null, 2) + '\n');
   return file;
+}
+
+// After writing records: rebuild the index and generated regions from the files.
+export function refresh(ctx) {
+  const index = loadIndex(ctx);
+  writeIndex(ctx, index);
+  syncGenerated(ctx, index);
+  return index;
 }
 
 export function rankOf(r) {

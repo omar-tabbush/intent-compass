@@ -73,20 +73,46 @@ export function normalizeStatus(raw) {
 }
 
 // "- Status: accepted" and "**Status:** accepted" lines before the first "## " heading.
+// Exported so intent accept edits exactly the line this reader takes as the status.
+export const BODY_META_RES = [
+  /^\s*[-*]\s+\*\*([A-Za-z][\w -]{0,30}?):?\*\*:?\s*(.+)$/,
+  /^\s*[-*]\s+([A-Za-z][\w -]{0,30}?):\s+(.+)$/,
+  /^\s*\*\*([A-Za-z][\w -]{0,30}?):?\*\*:?\s*(.+)$/,
+];
+
+export function metaKey(k) {
+  return k.trim().toLowerCase().replace(/\s+/g, '-');
+}
+
 function bodyMeta(body) {
   const meta = {};
   for (const line of body.split(/\r?\n/)) {
     if (/^##\s/.test(line)) break;
-    const m =
-      line.match(/^\s*[-*]\s+\*\*([A-Za-z][\w -]{0,30}?):?\*\*:?\s*(.+)$/) ||
-      line.match(/^\s*[-*]\s+([A-Za-z][\w -]{0,30}?):\s+(.+)$/) ||
-      line.match(/^\s*\*\*([A-Za-z][\w -]{0,30}?):?\*\*:?\s*(.+)$/);
+    const m = BODY_META_RES.map((re) => line.match(re)).find(Boolean);
     if (m) {
-      const k = m[1].trim().toLowerCase().replace(/\s+/g, '-');
+      const k = metaKey(m[1]);
       if (!(k in meta)) meta[k] = m[2].trim();
     }
   }
   return meta;
+}
+
+// "Status: Accepted" or "Review Date:" in frontmatter read like their lowercase keys; an exact key wins.
+function foldKeys(data) {
+  const out = { ...data };
+  for (const [k, v] of Object.entries(data)) {
+    const low = metaKey(k);
+    if (!Object.hasOwn(out, low)) out[low] = v;
+  }
+  return out;
+}
+
+// "superseded by [[x|0003]])": drop a stray closing bracket, but keep a wikilink's own "]]".
+export function trimUnbalanced(s) {
+  let t = String(s).trim();
+  const count = (c) => t.split(c).length - 1;
+  while (/[)\]]$/.test(t) && (count('(') < count(')') || count('[') < count(']'))) t = t.slice(0, -1).trimEnd();
+  return t;
 }
 
 function list(v) {
@@ -123,7 +149,7 @@ export function hasRationale(text) {
 export function parseRecord(rel, text, { ns = 'root', moduleNames = new Set() } = {}) {
   const { data, body, hasFrontmatter } = splitFrontmatter(text);
   const bm = bodyMeta(body);
-  const meta = { ...bm, ...data };
+  const meta = { ...bm, ...foldKeys(data) };
   const secs = sections(body);
   const file = rel.split('/').at(-1).replace(/\.md$/i, '');
   const numMatch = file.match(/^(\d+)(?=[-_ ]|$)/);
@@ -146,7 +172,7 @@ export function parseRecord(rel, text, { ns = 'root', moduleNames = new Set() } 
   const status = normalizeStatus(statusRaw);
   const supersededBy = list(meta['superseded-by'] ?? meta.superseded_by ?? meta.supersededBy);
   const inlineBy = statusRaw.match(/superseded\s+by\s+(.+)$/i);
-  if (inlineBy && status === 'superseded') supersededBy.push(inlineBy[1].replace(/[)\]]+$/, '').trim());
+  if (inlineBy && status === 'superseded') supersededBy.push(trimUnbalanced(inlineBy[1]));
 
   return {
     id,
@@ -179,7 +205,8 @@ function dateOf(v) {
 }
 
 export function parseModule(rel, text, name) {
-  const { data, body } = splitFrontmatter(text);
+  const { data: raw, body } = splitFrontmatter(text);
+  const data = foldKeys(raw);
   const secs = sections(body);
   return {
     name,

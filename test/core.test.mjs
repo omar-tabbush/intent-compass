@@ -2,14 +2,19 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { splitFrontmatter, stringifyFrontmatter, sections, unwiki } from '../src/fm.mjs';
 import { matchPath, globBase, normalizePath } from '../src/glob.mjs';
-import { normalizeStatus, parseRecord, extractRefs, classify } from '../src/vault.mjs';
-import { buildIndex, loadIndex, governing } from '../src/index.mjs';
-import { nextNumber, slugify, recordRelPath } from '../src/ids.mjs';
+import { readFileSync, realpathSync, symlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { normalizeStatus, parseRecord, parseModule, extractRefs, classify } from '../src/vault.mjs';
+import { buildIndex, loadIndex, governing, refresh } from '../src/index.mjs';
+import { freeNumber, nextNumber, slugify, recordRelPath } from '../src/ids.mjs';
 import { renderRecord } from '../src/record.mjs';
-import { replaceRegion, region } from '../src/generated.mjs';
+import { replaceRegion, region, hubContent } from '../src/generated.mjs';
 import { loadContext } from '../src/config.mjs';
 import { parseArgs } from '../src/io.mjs';
-import { makeRepo, cleanup, record, moduleNote } from './helpers.mjs';
+import { listDirs } from '../src/walk.mjs';
+import { ensureCache } from '../src/session.mjs';
+import { refresh as sharedRefresh } from '../src/commands/_shared.mjs';
+import { makeRepo, cleanup, record, moduleNote, tempDir } from './helpers.mjs';
 
 test('frontmatter: scalars, inline and block lists, comments, quotes', () => {
   const { data, body, hasFrontmatter } = splitFrontmatter(
@@ -229,4 +234,101 @@ test('loadContext: null when not opted in, finds root from subfolder', () => {
   } finally {
     cleanup(root);
   }
+});
+
+// Regression tests for core bugs found while integrating the commands.
+
+test('frontmatter: an empty block is still frontmatter, not body text', () => {
+  const r = splitFrontmatter('---\n---\n# Title\n');
+  assert.equal(r.hasFrontmatter, true);
+  assert.deepEqual(r.data, {});
+  assert.equal(r.body, '# Title\n');
+  assert.equal(splitFrontmatter('﻿---\r\n---\r\nx').body, 'x');
+  assert.equal(parseRecord('decisions/0001-a.md', '---\n---\n# A\n\n- Status: accepted\n').status, 'accepted');
+});
+
+test('parseRecord: inline "superseded by [[link|alias]]" keeps the wikilink and resolves across namespaces', () => {
+  const old = parseRecord('modules/inv/decisions/0001-a.md', '---\nstatus: Superseded by [[modules/pay/decisions/0003-b|0003]]\n---\n# A\n', { ns: 'inv' });
+  assert.deepEqual(old.supersededByRaw, ['[[modules/pay/decisions/0003-b|0003]]']);
+  const paren = parseRecord('decisions/0002-c.md', '---\nstatus: superseded (superseded by 0009)\n---\n# C\n');
+  assert.deepEqual(paren.supersededByRaw, ['0009']);
+  const neu = parseRecord('modules/pay/decisions/0003-b.md', '---\nstatus: accepted\n---\n# B\n', { ns: 'pay' });
+  const idx = buildIndex(vaultOf([old, neu]));
+  assert.deepEqual(idx.records.find((r) => r.id === 'inv/0001').supersededBy, ['pay/0003']);
+  assert.equal(idx.records.find((r) => r.id === 'inv/0001').effectiveStatus, 'superseded');
+  assert.deepEqual(idx.problems, []);
+});
+
+test('parseRecord and parseModule: capitalised frontmatter keys read like lowercase ones; an exact key wins', () => {
+  const r = parseRecord('decisions/0001-a.md', '---\nStatus: Accepted\nReview Date: 2027-01-01\nGoverns: [src/a/**]\n---\n# A\n');
+  assert.equal(r.status, 'accepted');
+  assert.equal(r.reviewDate, '2027-01-01');
+  assert.deepEqual(r.governs, ['src/a/**']);
+  assert.equal(parseRecord('decisions/0002-b.md', '---\nstatus: proposed\nStatus: Accepted\n---\n# B\n').status, 'proposed');
+  assert.deepEqual(parseModule('modules/m/m.md', '---\nType: module\nGoverns: [src/m/**]\n---\n# m\n', 'm').governs, ['src/m/**']);
+});
+
+test('index: a duplicate-id problem lists every path as an array too', () => {
+  const recs = ['decisions/0007-a.md', 'decisions/0007-b, with comma.md'].map((p) => parseRecord(p, '---\nstatus: accepted\n---\n# t\n'));
+  const dup = buildIndex(vaultOf(recs)).problems.find((p) => p.kind === 'duplicate-id');
+  assert.deepEqual(dup.paths, ['decisions/0007-a.md', 'decisions/0007-b, with comma.md']);
+});
+
+test('listDirs: the vault is never a code folder, even with codeRoots ["."]', () => {
+  const root = makeRepo({ 'src/a.ts': '', 'intent-vault/decisions/0001-a.md': record({ id: '0001', title: 'A' }) }, { config: { codeRoots: ['.'] } });
+  try {
+    assert.deepEqual(listDirs(loadContext(root), ''), ['src']);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('ctx.rel: a path through a symlink still maps into the repo', () => {
+  const root = makeRepo({ 'src/a/b.ts': '' });
+  const linkDir = tempDir();
+  try {
+    const link = join(linkDir, 'repo');
+    symlinkSync(root, link, 'dir');
+    const viaLink = loadContext(link);
+    assert.equal(viaLink.rel(join(realpathSync(root), 'src/a/b.ts')), 'src/a/b.ts');
+    assert.equal(viaLink.rel(join(realpathSync(root), 'src/new/c.ts')), 'src/new/c.ts', 'a file Write is about to create');
+    const direct = loadContext(root);
+    assert.equal(direct.rel(join(link, 'src/a/b.ts')), 'src/a/b.ts');
+    assert.ok(direct.rel(join(linkDir, 'elsewhere.ts')).startsWith('..'), 'outside stays outside');
+  } finally {
+    cleanup(linkDir);
+    cleanup(root);
+  }
+});
+
+test('freeNumber: skips numbers already on disk that the index has not seen', () => {
+  const root = makeRepo({ 'intent-vault/decisions/0001-a.md': '', 'intent-vault/decisions/0002-b.md': '', 'intent-vault/modules/m/decisions/0005-x.md': '' });
+  try {
+    const vault = join(root, 'intent-vault');
+    assert.equal(freeNumber(vault, 'root', '0001'), '0003');
+    assert.equal(freeNumber(vault, 'root', '0004'), '0004');
+    assert.equal(freeNumber(vault, 'm', 5), '0006');
+    assert.equal(freeNumber(vault, 'none', '0001'), '0001');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('ensureCache: appends .cache/ to an existing .gitignore without trimming it', () => {
+  const root = makeRepo({ 'intent-vault/.gitignore': 'notes/\n\n\n' });
+  try {
+    ensureCache(loadContext(root));
+    assert.equal(readFileSync(join(root, 'intent-vault/.gitignore'), 'utf8'), 'notes/\n\n\n.cache/\n');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('refresh lives in the core; commands share the same function', () => {
+  assert.equal(sharedRefresh, refresh);
+});
+
+test('hub: one record is "1 record"', () => {
+  const idx = buildIndex(vaultOf([parseRecord('decisions/0001-a.md', '---\nstatus: accepted\n---\n# A\n')]));
+  assert.match(hubContent(idx), /^1 record: 1 accepted,/m);
 });

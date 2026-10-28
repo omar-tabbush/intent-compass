@@ -1,5 +1,9 @@
-// ID allocation. Numbers are allocated here, never chosen by a model, so two
-// agents in one checkout cannot pick the same one.
+// ID allocation. Numbers are allocated here, never chosen by a model. The record folder
+// is checked right before writing, so two agents in one checkout rarely pick the same one;
+// if they still do, the index reports a duplicate-id problem.
+
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 export function slugify(title) {
   const s = String(title)
@@ -19,6 +23,18 @@ export function nextNumber(index, ns) {
     if (Number.isFinite(n) && n > max) max = n;
   }
   return String(max + 1).padStart(4, '0');
+}
+
+// The first number from num up that no file in the namespace's record folder uses. The index
+// can be a moment old when another agent has just written a record.
+export function freeNumber(vaultDir, ns, num) {
+  const dir = join(vaultDir, ns === 'root' ? 'decisions' : `modules/${ns}/decisions`);
+  let names = [];
+  try { names = readdirSync(dir); } catch { /* no folder yet */ }
+  const used = new Set(names.map((f) => f.match(/^(\d+)(?=[-_ .]|$)/)).filter(Boolean).map((m) => parseInt(m[1], 10)));
+  let n = parseInt(num, 10);
+  while (used.has(n)) n++;
+  return String(n).padStart(4, '0');
 }
 
 export function recordRelPath(ns, num, slug) {

@@ -1,12 +1,13 @@
 // Frontmatter and section parsing. A small YAML subset: scalars, inline lists,
 // block lists. Anything richer is kept as a raw string so nothing is lost.
 
-const FM_RE = /^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
+// An empty block ("---\n---\n") is still frontmatter, so it never leaks into the body.
+const FM_RE = /^\uFEFF?---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)/;
 
 export function splitFrontmatter(text) {
   const m = text.match(FM_RE);
   if (!m) return { data: {}, body: text, hasFrontmatter: false };
-  return { data: parseYaml(m[1]), body: text.slice(m[0].length), hasFrontmatter: true };
+  return { data: parseYaml(m[1] ?? ''), body: text.slice(m[0].length), hasFrontmatter: true };
 }
 
 export function parseYaml(src) {

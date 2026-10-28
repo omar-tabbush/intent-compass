@@ -47,6 +47,12 @@ export function addMonths(isoDate, months) {
   return d.toISOString().slice(0, 10);
 }
 
+// date + config.reviewMonths, or null when reviews are turned off (0 or not a number).
+export function reviewDateFor(date, months) {
+  const n = Number(months);
+  return Number.isFinite(n) && n > 0 ? addMonths(date, n) : null;
+}
+
 export function isoDate(date) {
   return date.toISOString().slice(0, 10);
 }

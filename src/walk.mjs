@@ -7,13 +7,16 @@ import { matchPath } from './glob.mjs';
 const ALWAYS_SKIP = new Set(['.git', 'node_modules', '.obsidian', '.trash']);
 const LIMIT = 100000;
 
+// The vault folder inside the repo, which is notes, not code.
+function inVault(ctx, rel) {
+  const vault = ctx.vaultInRepo && ctx.vaultRel !== '.' ? ctx.vaultRel : null;
+  return Boolean(vault) && (rel === vault || rel.startsWith(vault + '/'));
+}
+
 export function listFiles(ctx, relDir = '') {
   const out = [];
   const ignore = ctx.config.ignore || [];
-  const vault = ctx.vaultInRepo && ctx.vaultRel !== '.' ? ctx.vaultRel : null;
-  const skip = (rel) =>
-    (vault && (rel === vault || rel.startsWith(vault + '/'))) ||
-    ignore.some((g) => matchPath(g, rel));
+  const skip = (rel) => inVault(ctx, rel) || ignore.some((g) => matchPath(g, rel));
 
   const walk = (rel) => {
     if (out.length >= LIMIT) return;
@@ -33,13 +36,13 @@ export function listFiles(ctx, relDir = '') {
   return out;
 }
 
-// Immediate sub-folders of a repo-relative folder (for code areas).
+// Immediate sub-folders of a repo-relative folder (for code areas), without the vault.
 export function listDirs(ctx, relDir) {
   try {
     return readdirSync(join(ctx.root, relDir), { withFileTypes: true })
       .filter((e) => e.isDirectory() && !ALWAYS_SKIP.has(e.name) && !e.name.startsWith('.'))
       .map((e) => (relDir ? `${relDir}/${e.name}` : e.name))
-      .filter((d) => !(ctx.config.ignore || []).some((g) => matchPath(g, d)))
+      .filter((d) => !inVault(ctx, d) && !(ctx.config.ignore || []).some((g) => matchPath(g, d)))
       .sort();
   } catch {
     return [];
