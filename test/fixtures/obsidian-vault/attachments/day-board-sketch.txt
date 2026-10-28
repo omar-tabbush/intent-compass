@@ -1,0 +1,1 @@
+Sketch of the day board: one column per technician, one row per hour.
