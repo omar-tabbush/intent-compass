@@ -18,5 +18,5 @@
     "test": "node --test test/*.test.mjs"
   },
   "private": true,
-  "license": "UNLICENSED"
+  "license": "MIT"
 }
